@@ -12,13 +12,13 @@ The runtime target is Git's native `reference-transaction` hook. The hook should
 - Support this minimal statement set:
   - `branch NAME`
   - `checkout NAME`
-  - `merge NAME id:"SOURCE -> TARGET"`
-  - `commit id:"..." tag:"..."`
+  - `merge NAME id:"SOURCE to TARGET" tag:"..."`
 - Require wildcard branch families to be quoted, for example `"infra/*"`.
 - Treat `branch X` after `checkout Y` as an allowed branch-from edge.
-- Treat `checkout TARGET` followed by `merge SOURCE` as a required merge/containment edge: `SOURCE -> TARGET`.
+- Treat `checkout TARGET` followed by `merge SOURCE` as a required merge/containment edge: `SOURCE to TARGET`.
 - Treat a source merged to multiple targets as a multi-target integration requirement.
-- Treat tag commits after multi-target merges as release confirmation points.
+- Treat tags on `main` merge statements as release confirmation points.
+- Parse `tag:"v#.#.0"` and `tag:"v#.#.#"` on merge statements as numeric tag policies from the graph itself.
 
 ## Generated Policy
 
@@ -56,11 +56,13 @@ git config --worktree core.hooksPath .githooks
 - Parser tests for quoted wildcard branch families.
 - Parser tests for branch-from and merge-to edges.
 - Policy generation tests for:
-  - `infra/* -> dev`
-  - `feat/* -> dev`
-  - `release/* -> main` and `release/* -> dev`
-  - `hotfix/* -> main` and `hotfix/* -> dev`
+  - `infra/* to dev`
+  - `feat/* to dev`
+  - `release/* to main` and `release/* to dev`
+  - `hotfix/* to main` and `hotfix/* to dev`
 - Hook integration tests in a temporary Git repo:
   - reject illegal `main <- dev`
   - allow source family updates that satisfy the generated policy
-  - require release/hotfix source containment in all required targets before tag confirmation
+  - require release/hotfix source containment in all required targets before tagged main merge confirmation
+  - reject release tags that do not match `v#.#.0`
+  - reject hotfix tags that do not match `v#.#.#`
