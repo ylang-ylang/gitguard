@@ -21,7 +21,11 @@ class InstallError(RuntimeError):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Install git-flow-guard hooks into a Git repository.")
+    parser = argparse.ArgumentParser(
+        description="Install git-flow-guard hooks into a Git repository.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=available_configs_summary(),
+    )
     parser.add_argument("--repo", default=".", help="Target Git repository working tree. Default: current directory.")
     parser.add_argument(
         "--config",
@@ -36,6 +40,38 @@ def main() -> int:
     )
     args = parser.parse_args()
     return run_install_command(repo=args.repo, config=args.config, scope=args.scope, parser=parser)
+
+
+def available_configs_summary() -> str:
+    config_root = PROJECT_ROOT / "configs"
+    lines = ["Available bundled configs:"]
+
+    if not config_root.exists():
+        return "\n".join([*lines, f"  (configs directory not found: {config_root})"])
+
+    configs = sorted(path for path in config_root.iterdir() if (path / "contribution.md").is_file())
+    if not configs:
+        return "\n".join([*lines, "  (none found)"])
+
+    for config_dir in configs:
+        contribution_path = config_dir / "contribution.md"
+        lines.append(f"  {config_dir.name}: {format_config_branches(contribution_path)}")
+    return "\n".join(lines)
+
+
+def format_config_branches(contribution_path: Path) -> str:
+    try:
+        policy = load_policy_from_markdown(contribution_path)
+    except PolicyParseError as exc:
+        return f"cannot parse contribution.md ({exc})"
+
+    branches = policy.get("branches", {})
+    long_lived = branches.get("long_lived", [])
+    families = branches.get("families", [])
+    all_branches = [*long_lived, *families]
+    if not all_branches:
+        return "branches: (none)"
+    return "branches: " + ", ".join(all_branches)
 
 
 def run_install_command(repo: str | Path, config: str | Path, scope: str, parser: argparse.ArgumentParser) -> int:

@@ -8,11 +8,21 @@ from git_flow_guard import install as install_module
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="git-flow-guard")
+    config_summary = install_module.available_configs_summary()
+    parser = argparse.ArgumentParser(
+        prog="git-flow-guard",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=config_summary,
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    install_parser = subparsers.add_parser("install", help="Install hooks into a Git repository.")
+    install_parser = subparsers.add_parser(
+        "install",
+        help="Install hooks into a Git repository.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=config_summary,
+    )
     install_parser.add_argument("--repo", default=".", help="Target Git repository working tree. Default: current directory.")
     install_parser.add_argument(
         "--config",
