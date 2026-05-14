@@ -31,10 +31,20 @@ The image does not copy repository code. Compose bind-mounts the repository read
 The policy tests install hooks through the package CLI:
 
 ```bash
-git-flow-guard install --repo .tmp/<config_name> --config <config_name> --scope worktree
+PYTHONPATH=src python -m git_flow_guard.cli install --repo .tmp/<config_name> --config <config_name> --scope worktree
 ```
 
-The installed hook wrapper and Python runner live inside each generated test repository under `.git-flow-guard/`. This keeps the generated repo usable from both Docker and the host, because `core.hooksPath` does not point at `/workspace/test_env/...`.
+If you installed the isolated uv tool, use `git-flow-guard` in place of `PYTHONPATH=src python -m git_flow_guard.cli`.
+
+The installed contribution document, hook wrapper, generated policy snapshot, and Python runner live inside each generated test repository under `.git-flow-guard/`. This keeps the generated repo usable from both Docker and the host, because `core.hooksPath` does not point at `/workspace/test_env/...`.
+
+Hook rejection messages must include a policy hint that points at the generated repo's local Markdown file:
+
+```text
+git-flow-guard: see policy: <repo>/.git-flow-guard/contribution.md
+```
+
+The rejection reason itself uses a stable `CODE key=value` format so tests and agents can match exact failure classes without parsing friendly prose.
 
 Each config gets a separate test directory:
 

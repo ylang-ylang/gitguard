@@ -5,16 +5,9 @@ Each subdirectory is an independent branch-flow policy config.
 Required files:
 
 - `contribution.md`: Mermaid `gitGraph` policy source.
-- `policy.yaml`: generated output from `contribution.md`.
 
-Regenerate all configs from the repository root:
+Optional files:
 
-```bash
-git-flow-guard generate --all
-```
+- `policy.yaml`: generated review snapshot from `contribution.md`.
 
-Validate generated files without writing:
-
-```bash
-git-flow-guard generate --all --check
-```
+Maintain `contribution.md` by hand. The installer parses it directly and writes the runtime policy into the target repository.

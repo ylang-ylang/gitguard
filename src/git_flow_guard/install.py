@@ -9,10 +9,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from git_flow_guard.generate import render_policy_yaml
 from git_flow_guard.mermaid import PolicyParseError, load_policy_from_markdown
 
 
-PROJECT_ROOT = Path.cwd()
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VALID_SCOPES = ("worktree", "local", "global")
 
 
@@ -61,13 +62,19 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
 
     git_dir = resolved_git_dir(repo)
     contribution_path = resolve_config(config)
+    rendered_policy_yaml = render_policy_yaml(contribution_path)
     policy = load_policy_from_markdown(contribution_path)
-    policy.setdefault("source", {})["path"] = display_policy_path(contribution_path)
 
+    install_dir = repo / ".git-flow-guard"
     hook_dir = repo / ".git-flow-guard" / "hooks"
     runtime_dir = repo / ".git-flow-guard" / "runtime"
     hook_dir.mkdir(parents=True, exist_ok=True)
     runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    installed_contribution_path = install_dir / "contribution.md"
+    shutil.copyfile(contribution_path, installed_contribution_path)
+    policy.setdefault("source", {})["path"] = display_policy_path(installed_contribution_path)
+    policy["source"]["original_path"] = display_policy_path(contribution_path)
 
     runtime_runner = runtime_dir / "policy_reference_transaction_hook.py"
     if runner_path:
@@ -77,9 +84,11 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
     runtime_runner.chmod(0o755)
 
     policy_path = git_dir / "git-flow-guard-policy.json"
+    policy_yaml_path = repo / ".git-flow-guard" / "policy.yaml"
     state_path = git_dir / "git-flow-guard-state.json"
     log_path = git_dir / "git-flow-guard-hook.log"
     policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True), encoding="utf-8")
+    policy_yaml_path.write_text(rendered_policy_yaml, encoding="utf-8")
 
     hook_path = hook_dir / "reference-transaction"
     hook_path.write_text(reference_transaction_hook(), encoding="utf-8")
@@ -89,6 +98,8 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
     print(f"installed git-flow-guard hook into {repo}")
     print(f"scope={scope}")
     print("core.hooksPath=.git-flow-guard/hooks")
+    print(f"contribution={installed_contribution_path}")
+    print(f"generated={policy_yaml_path}")
     print(f"policy={policy_path}")
     print(f"state={state_path}")
     print(f"log={log_path}")

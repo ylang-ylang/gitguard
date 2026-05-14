@@ -48,8 +48,7 @@ def generate_config(config_dir: Path, check: bool = False) -> None:
     if not source_path.exists():
         raise PolicyParseError(f"{source_path} does not exist.")
 
-    policy = load_policy_from_markdown(source_path)
-    rendered = "# Generated from contribution.md. Do not edit by hand.\n" + dump_yaml(policy)
+    rendered = render_policy_yaml(source_path)
 
     if check:
         if not output_path.exists():
@@ -60,8 +59,20 @@ def generate_config(config_dir: Path, check: bool = False) -> None:
         print(f"ok: {output_path}")
         return
 
-    output_path.write_text(rendered, encoding="utf-8")
+    write_policy_yaml(source_path, output_path)
     print(f"generated: {output_path}")
+
+
+def render_policy_yaml(source_path: Path) -> str:
+    policy = load_policy_from_markdown(source_path)
+    return "# Generated from contribution.md. Do not edit by hand.\n" + dump_yaml(policy)
+
+
+def write_policy_yaml(source_path: Path, output_path: Path | None = None) -> Path:
+    output_path = output_path or source_path.with_name("policy.yaml")
+    rendered = render_policy_yaml(source_path)
+    output_path.write_text(rendered, encoding="utf-8")
+    return output_path
 
 
 def _select_config_dirs(config: str | None, all_configs: bool) -> list[Path]:

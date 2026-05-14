@@ -45,39 +45,39 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.merge_to(branch, "dev", message=START_SYMBOL)
 
     def run_rejection_tests(self) -> None:
-        self.expect_rejected(["branch", "bug/demo", "dev"], "branch name is not allowed")
-        self.expect_rejected(["branch", "release/from-main", "main"], "must branch from refs/heads/dev")
-        self.expect_rejected(["branch", "hotfix/from-dev", "dev"], "must branch from refs/heads/main")
+        self.expect_rejected(["branch", "bug/demo", "dev"], "BRANCH_NAME_NOT_ALLOWED")
+        self.expect_rejected(["branch", "release/from-main", "main"], "BRANCH_SOURCE_MISMATCH")
+        self.expect_rejected(["branch", "hotfix/from-dev", "dev"], "BRANCH_SOURCE_MISMATCH")
 
         self.git("checkout", "main")
         self.expect_rejected(
             ["merge", "--no-ff", "--no-edit", "infra/reject-to-main"],
-            "no allowed source branch",
+            "PROTECTED_REF_NO_ALLOWED_SOURCE",
             cleanup=self.cleanup_merge_state,
         )
 
         self.git("checkout", "main")
         self.expect_rejected(
             ["merge", "--no-ff", "--no-edit", "feat/reject-to-main"],
-            "no allowed source branch",
+            "PROTECTED_REF_NO_ALLOWED_SOURCE",
             cleanup=self.cleanup_merge_state,
         )
 
-        self.expect_rejected(["tag", "release-1.0.0", "main"], "tag name is not allowed")
+        self.expect_rejected(["tag", "release-1.0.0", "main"], "TAG_NAME_NOT_ALLOWED")
         self.expect_rejected(
             ["tag", "v1.1.2", self.release_sha],
-            "tag target is not attached to the required source family",
+            "TAG_SOURCE_TAG_PATTERN_MISMATCH",
         )
         self.expect_rejected(
             ["tag", "v1.2.2", self.hotfix_wrong_line_sha],
-            "must stay on base release line v1.1",
+            "TAG_VERSION_LINE_MISMATCH",
         )
-        self.expect_rejected(["tag", "v0.9.0", self.old_release_sha], "tag target is not attached")
+        self.expect_rejected(["tag", "v0.9.0", self.old_release_sha], "TAG_VERSION_NOT_INCREMENTAL")
 
         self.git("checkout", "main")
         self.expect_rejected(
             ["merge", "--no-ff", "--no-edit", "release/reject-main-before-dev"],
-            "before refs/heads/dev",
+            "MULTI_TARGET_ORDER",
             cleanup=self.cleanup_merge_state,
         )
 

@@ -4,24 +4,31 @@ Git Flow Guard turns a restricted Mermaid `gitGraph` into a local Git `reference
 
 It is intended for repositories that want branch-flow rules to be written once in a human-readable `contribution.md` file, then enforced locally before invalid branch or tag refs are created.
 
-## Install
+## Run
 
-Install from this repository:
-
-```bash
-python -m pip install -e .
-```
-
-This exposes one command:
-
-```bash
-git-flow-guard --help
-```
-
-When developing directly from this checkout without installing, use:
+The default workflow does not require installing into Python at all:
 
 ```bash
 PYTHONPATH=src python -m git_flow_guard.cli --help
+```
+
+This only uses the checkout as source code. It does not write to system Python, user site-packages, or global Python package state.
+
+If you want the `git-flow-guard` command on your `PATH`, install it as an isolated uv tool:
+
+```bash
+uv tool install --editable .
+git-flow-guard --help
+```
+
+`uv tool install` creates a uv-managed tool environment. It is not a system Python install.
+
+Do not run a bare system-level `pip install -e .`. If you choose to use pip manually, activate a project-local virtual environment first:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
 ```
 
 ## Concepts
@@ -37,7 +44,7 @@ configs/<name>/
 
 `contribution.md` is the source of truth. It contains one supported Mermaid `gitGraph` block.
 
-`policy.yaml` is generated from `contribution.md` and should not be edited by hand.
+`policy.yaml` is an optional generated snapshot from `contribution.md`. The installer generates the runtime policy automatically, so users normally maintain only `contribution.md`.
 
 `test_case.py` contains config-specific hook behavior tests. Shared test scaffolding lives in `configs/test_base.py`, which only provides generic Git helpers, hook installation, ref snapshots, and rejection assertions. Policy-specific DAG construction and rejection cases belong in each config.
 
@@ -76,38 +83,12 @@ v#.#.0
 v=.=.#
 ```
 
-## Generate Policy
-
-Generate all bundled policies:
-
-```bash
-git-flow-guard generate --all
-```
-
-Check that generated policies are current:
-
-```bash
-git-flow-guard generate --all --check
-```
-
-Generate one config:
-
-```bash
-git-flow-guard generate configs/infra-feat-release
-```
-
-Without installing the package:
-
-```bash
-PYTHONPATH=src python -m git_flow_guard.cli generate --all --check
-```
-
 ## Install Hook
 
 Install one config into a target repository:
 
 ```bash
-git-flow-guard install \
+PYTHONPATH=src python -m git_flow_guard.cli install \
   --repo /path/to/repo \
   --config infra-feat-release \
   --scope worktree
@@ -131,11 +112,24 @@ The installer writes a repo-relative hook path:
 core.hooksPath=.git-flow-guard/hooks
 ```
 
+During installation, the selected `contribution.md` is parsed automatically and copied into the target repository. Users maintain the policy as Markdown, and the installed runtime policy is written next to the hook.
+
 It copies the packaged runtime hook into the target repo:
 
 ```text
+<repo>/.git-flow-guard/contribution.md
 <repo>/.git-flow-guard/hooks/reference-transaction
+<repo>/.git-flow-guard/policy.yaml
 <repo>/.git-flow-guard/runtime/policy_reference_transaction_hook.py
+```
+
+When a Git operation is rejected, the hook prints a `see policy:` hint pointing at `<repo>/.git-flow-guard/contribution.md`. This gives humans and agents a local Markdown file to inspect and repair.
+
+Rejection reasons use a stable `CODE key=value` format, for example:
+
+```text
+git-flow-guard: TAG_REQUIRED_TARGETS_MISSING tag=refs/tags/v1.2.0 target=abc123 missing=refs/heads/main
+git-flow-guard: see policy: <repo>/.git-flow-guard/contribution.md
 ```
 
 Runtime state is stored in the target repo's Git directory:
@@ -153,7 +147,6 @@ Because the hook path is repo-relative, a repo generated or installed in Docker 
 Run package-level checks without installation:
 
 ```bash
-PYTHONPATH=src python -m git_flow_guard.cli generate --all --check
 PYTHONPATH=src python -m py_compile \
   src/git_flow_guard/__init__.py \
   src/git_flow_guard/cli.py \

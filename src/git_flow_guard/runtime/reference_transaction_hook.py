@@ -29,7 +29,30 @@ class SourceCandidate:
 
 
 class HookReject(RuntimeError):
-    pass
+    def __init__(self, code: str, **context: Any) -> None:
+        self.code = code
+        self.context = context
+        super().__init__(format_reject(code, context))
+
+
+def format_reject(code: str, context: dict[str, Any]) -> str:
+    if not context:
+        return code
+    fields = [f"{key}={format_context_value(value)}" for key, value in context.items()]
+    return " ".join([code, *fields])
+
+
+def format_context_value(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple, set)):
+        return ",".join(format_context_value(item) for item in value)
+    text = str(value)
+    if re.fullmatch(r"[A-Za-z0-9_./:@+=,-]+", text):
+        return text
+    return json.dumps(text, ensure_ascii=True)
 
 
 def main() -> int:
@@ -55,7 +78,7 @@ def main() -> int:
         elif phase == "aborted":
             return 0
         else:
-            raise HookReject(f"unsupported reference-transaction phase: {phase}")
+            raise HookReject("HOOK_UNSUPPORTED_PHASE", phase=phase)
     except HookReject as exc:
         print(f"git-flow-guard: {exc}", file=sys.stderr)
         source_path = policy.get("source", {}).get("path")
@@ -98,7 +121,7 @@ def validate_branch_name(policy: dict[str, Any], ref: str) -> None:
     for family in policy["branches"].get("families", []):
         if matches_ref_pattern(f"refs/heads/{family}", ref):
             return
-    raise HookReject(f"branch name is not allowed by policy: {ref}")
+    raise HookReject("BRANCH_NAME_NOT_ALLOWED", ref=ref)
 
 
 def validate_branch_creation(repo: Path, policy: dict[str, Any], update: RefUpdate) -> None:
@@ -107,13 +130,13 @@ def validate_branch_creation(repo: Path, policy: dict[str, Any], update: RefUpda
 
     edge = first_matching(policy.get("branch_from", []), "target_ref_regex", update.ref)
     if not edge:
-        raise HookReject(f"branch creation is not allowed by policy: {update.ref}")
+        raise HookReject("BRANCH_CREATION_NOT_ALLOWED", ref=update.ref)
 
     source_ref = edge["source_ref"]
     if not ref_exists(repo, source_ref):
-        raise HookReject(f"required branch source does not exist: {source_ref}")
+        raise HookReject("BRANCH_SOURCE_MISSING", ref=update.ref, source_ref=source_ref)
     if rev_parse(repo, source_ref) != update.new:
-        raise HookReject(f"{update.ref} must branch from {source_ref}")
+        raise HookReject("BRANCH_SOURCE_MISMATCH", ref=update.ref, source_ref=source_ref, new=short_sha(update.new))
 
 
 def validate_protected_target_update(
@@ -125,16 +148,19 @@ def validate_protected_target_update(
     if update.old == ZERO:
         return
     if update.new == ZERO:
-        raise HookReject(f"deleting protected ref is not allowed: {update.ref}")
+        raise HookReject("PROTECTED_REF_DELETE", ref=update.ref)
     if not is_ancestor(repo, update.old, update.new):
-        raise HookReject(f"non-fast-forward protected ref update is not allowed: {update.ref}")
+        raise HookReject("PROTECTED_REF_NON_FAST_FORWARD", ref=update.ref, old=short_sha(update.old), new=short_sha(update.new))
 
     candidates = source_candidates_for_target(repo, policy, update)
     if not candidates:
-        raise HookReject(f"protected ref update has no allowed source branch: {update.ref}")
+        raise HookReject("PROTECTED_REF_NO_ALLOWED_SOURCE", ref=update.ref, old=short_sha(update.old), new=short_sha(update.new))
     if len(candidates) > 1:
-        joined = ", ".join(candidate.ref for candidate in candidates)
-        raise HookReject(f"protected ref update matches multiple source branches: {joined}")
+        raise HookReject(
+            "PROTECTED_REF_MULTIPLE_SOURCES",
+            ref=update.ref,
+            sources=[candidate.ref for candidate in candidates],
+        )
 
     candidate = candidates[0]
     required = required_target_refs(policy, candidate.rule["source"])
@@ -148,7 +174,13 @@ def validate_protected_target_update(
     next_index = len(completed_before)
     next_required = required[next_index] if next_index < len(required) else None
     if update.ref != next_required:
-        raise HookReject(f"{update.ref} cannot receive {candidate.ref}@{candidate.sha[:12]} before {next_required}")
+        raise HookReject(
+            "MULTI_TARGET_ORDER",
+            ref=update.ref,
+            source_ref=candidate.ref,
+            source_sha=short_sha(candidate.sha),
+            expected_ref=next_required,
+        )
 
 
 def source_candidates_for_target(repo: Path, policy: dict[str, Any], update: RefUpdate) -> list[SourceCandidate]:
@@ -165,30 +197,87 @@ def source_candidates_for_target(repo: Path, policy: dict[str, Any], update: Ref
 
 def validate_tag(repo: Path, policy: dict[str, Any], proposed: dict[str, str], update: RefUpdate) -> None:
     if update.old != ZERO:
-        raise HookReject(f"moving existing tags is not allowed: {update.ref}")
+        raise HookReject("TAG_MOVE_NOT_ALLOWED", tag=update.ref, old=short_sha(update.old), new=short_sha(update.new))
+    source_head_matches = tag_source_head_matches(repo, policy, update.ref, update.new)
+    if source_head_matches and not [item for item in source_head_matches if item["tag_matches"]]:
+        raise HookReject(
+            "TAG_SOURCE_TAG_PATTERN_MISMATCH",
+            tag=update.ref,
+            target=short_sha(update.new),
+            source_refs=[item["source_ref"] for item in source_head_matches],
+            allowed_patterns=[item["tag_pattern"] for item in source_head_matches],
+        )
+
     rules = [rule for rule in policy.get("tag_rules", []) if re.match(rule["tag_ref_regex"], update.ref)]
     if not rules:
-        raise HookReject(f"tag name is not allowed by policy: {update.ref}")
+        raise HookReject("TAG_NAME_NOT_ALLOWED", tag=update.ref)
     tag_version = parse_version_ref(update.ref)
     state = load_state(Path(os.environ.get("GFG_STATE_JSON", repo / ".git" / "gfg-state.json")))
+    failures: list[HookReject] = []
 
     for rule in rules:
         required = required_target_refs(policy, rule["source"])
         source_regex = source_ref_regex(policy, rule["source"])
         source_refs = refs_matching(repo, source_regex)
-        targets_contain_tag_target = required and all(
-            ref_contains(repo, proposed.get(target_ref, target_ref), update.new) for target_ref in required
-        )
-        if not targets_contain_tag_target:
+        if not source_refs:
+            failures.append(HookReject("TAG_SOURCE_BRANCH_MISSING", tag=update.ref, source=rule["source"]))
             continue
 
+        missing_targets = [
+            target_ref
+            for target_ref in required
+            if not ref_contains(repo, proposed.get(target_ref, target_ref), update.new)
+        ]
+        if missing_targets:
+            failures.append(
+                HookReject(
+                    "TAG_REQUIRED_TARGETS_MISSING",
+                    tag=update.ref,
+                    target=short_sha(update.new),
+                    source=rule["source"],
+                    missing=missing_targets,
+                )
+            )
+            continue
+
+        matched_source_refs = []
         for source_ref in source_refs:
             if rev_parse(repo, source_ref) != update.new:
                 continue
-            if tag_rule_allows_version(repo, state, rule, source_ref, tag_version):
+            matched_source_refs.append(source_ref)
+            if tag_rule_allows_version(repo, state, rule, source_ref, update.ref, tag_version):
                 return
 
-    raise HookReject(f"tag target is not attached to the required source family and version line: {update.ref}")
+        if not matched_source_refs:
+            failures.append(
+                HookReject(
+                    "TAG_TARGET_NOT_SOURCE_HEAD",
+                    tag=update.ref,
+                    target=short_sha(update.new),
+                    source=rule["source"],
+                    source_refs=source_refs,
+                )
+            )
+
+    raise preferred_tag_failure(failures, update.ref)
+
+
+def tag_source_head_matches(repo: Path, policy: dict[str, Any], tag_ref: str, target_sha: str) -> list[dict[str, Any]]:
+    matches = []
+    for rule in policy.get("tag_rules", []):
+        source_regex = source_ref_regex(policy, rule["source"])
+        for source_ref in refs_matching(repo, source_regex):
+            if rev_parse(repo, source_ref) != target_sha:
+                continue
+            matches.append(
+                {
+                    "source": rule["source"],
+                    "source_ref": source_ref,
+                    "tag_pattern": rule.get("tag_pattern"),
+                    "tag_matches": re.match(rule["tag_ref_regex"], tag_ref) is not None,
+                }
+            )
+    return matches
 
 
 def tag_rule_allows_version(
@@ -196,27 +285,54 @@ def tag_rule_allows_version(
     state: dict[str, Any],
     rule: dict[str, Any],
     source_ref: str,
+    tag_ref: str,
     tag_version: tuple[int, int, int],
 ) -> bool:
     tokens = rule.get("tag_tokens", [])
     if not tag_tokens_match(tokens, tag_version):
-        return False
+        raise HookReject("TAG_PATTERN_COMPONENT_MISMATCH", tag=tag_ref, pattern=rule.get("tag_pattern"))
 
     if "=" in tokens:
         base = state.get("branch_bases", {}).get(source_ref)
         if not base or not base.get("base_release_tag"):
-            raise HookReject(f"{source_ref} has no recorded base release tag")
+            raise HookReject("TAG_BASE_RELEASE_MISSING", tag=tag_ref, source_ref=source_ref)
         base_version = parse_version_name(base["base_release_tag"])
         if tag_version[:2] != base_version[:2]:
             raise HookReject(
-                f"{source_ref} tag must stay on base release line v{base_version[0]}.{base_version[1]}"
+                "TAG_VERSION_LINE_MISMATCH",
+                tag=tag_ref,
+                source_ref=source_ref,
+                expected_major=base_version[0],
+                expected_minor=base_version[1],
+                actual_major=tag_version[0],
+                actual_minor=tag_version[1],
             )
-        return tag_version > max_existing_version(repo, major=base_version[0], minor=base_version[1])
+        latest = max_existing_version(repo, major=base_version[0], minor=base_version[1])
+        if latest is None or tag_version > latest:
+            return True
+        raise HookReject("TAG_VERSION_NOT_INCREMENTAL", tag=tag_ref, version=format_version(tag_version), latest=format_version(latest))
 
     latest = max_existing_version(repo)
     if latest is None:
         return True
-    return tag_version > latest
+    if tag_version > latest:
+        return True
+    raise HookReject("TAG_VERSION_NOT_INCREMENTAL", tag=tag_ref, version=format_version(tag_version), latest=format_version(latest))
+
+
+def preferred_tag_failure(failures: list[HookReject], tag_ref: str) -> HookReject:
+    if not failures:
+        return HookReject("TAG_RULE_NOT_SATISFIED", tag=tag_ref)
+    priority = {
+        "TAG_VERSION_LINE_MISMATCH": 0,
+        "TAG_VERSION_NOT_INCREMENTAL": 1,
+        "TAG_PATTERN_COMPONENT_MISMATCH": 2,
+        "TAG_BASE_RELEASE_MISSING": 3,
+        "TAG_TARGET_NOT_SOURCE_HEAD": 4,
+        "TAG_REQUIRED_TARGETS_MISSING": 5,
+        "TAG_SOURCE_BRANCH_MISSING": 6,
+    }
+    return min(failures, key=lambda failure: priority.get(failure.code, 100))
 
 
 def tag_tokens_match(tokens: list[str], version: tuple[int, int, int]) -> bool:
@@ -272,7 +388,7 @@ def parse_version_ref(ref: str) -> tuple[int, int, int]:
 def parse_version_name(name: str) -> tuple[int, int, int]:
     match = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)", name)
     if not match:
-        raise HookReject(f"invalid version tag: {name}")
+        raise HookReject("TAG_VERSION_INVALID", tag=name)
     return tuple(int(part) for part in match.groups())
 
 
@@ -285,15 +401,31 @@ def enforce_pending_lock(repo: Path, pending: dict[str, Any], update: RefUpdate)
         remaining = set(item["remaining_target_refs"])
 
         if update.ref == source_ref and update.new != source_sha:
-            raise HookReject(f"{source_ref} cannot move before required targets receive {source_sha[:12]}")
+            raise HookReject(
+                "PENDING_SOURCE_MOVED",
+                source_ref=source_ref,
+                expected_sha=short_sha(source_sha),
+                new=short_sha(update.new),
+            )
 
         if update.ref in remaining:
             if not is_ancestor(repo, source_sha, update.new):
-                raise HookReject(f"{update.ref} must receive pending {source_ref}@{source_sha[:12]}")
+                raise HookReject(
+                    "PENDING_TARGET_MISSING_SOURCE",
+                    ref=update.ref,
+                    source_ref=source_ref,
+                    source_sha=short_sha(source_sha),
+                )
             return
 
         if update.ref not in set(item["completed_target_refs"]):
-            raise HookReject(f"complete pending multi-target merge for {source_ref}@{source_sha[:12]} first")
+            raise HookReject(
+                "PENDING_MULTI_TARGET_INCOMPLETE",
+                ref=update.ref,
+                source_ref=source_ref,
+                source_sha=short_sha(source_sha),
+                remaining=sorted(remaining),
+            )
 
 
 def update_committed_state(repo: Path, policy: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
@@ -348,7 +480,7 @@ def source_ref_regex(policy: dict[str, Any], source_pattern: str) -> str:
     for item in policy.get("required_targets", []):
         if item.get("source") == source_pattern:
             return item["source_ref_regex"]
-    raise HookReject(f"source pattern has no generated source ref regex: {source_pattern}")
+    raise HookReject("POLICY_SOURCE_REGEX_MISSING", source=source_pattern)
 
 
 def read_updates(stdin: Any) -> list[RefUpdate]:
@@ -359,7 +491,7 @@ def read_updates(stdin: Any) -> list[RefUpdate]:
             continue
         parts = line.split(" ", 2)
         if len(parts) != 3:
-            raise HookReject(f"invalid reference-transaction input line: {line}")
+            raise HookReject("HOOK_INPUT_INVALID", line=line)
         updates.append(RefUpdate(old=parts[0], new=parts[1], ref=parts[2]))
     return updates
 
@@ -432,15 +564,29 @@ def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
         check=False,
     )
     if check and result.returncode != 0:
-        raise HookReject(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        raise HookReject("GIT_COMMAND_FAILED", command="git " + " ".join(args), stderr=result.stderr.strip())
     return result
 
 
 def required_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
-        raise HookReject(f"missing required environment variable: {name}")
+        raise HookReject("ENV_MISSING", name=name)
     return value
+
+
+def short_sha(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value == ZERO:
+        return ZERO
+    return value[:12]
+
+
+def format_version(version: tuple[int, int, int] | None) -> str | None:
+    if version is None:
+        return None
+    return f"v{version[0]}.{version[1]}.{version[2]}"
 
 
 if __name__ == "__main__":

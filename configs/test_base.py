@@ -139,17 +139,7 @@ class PolicyHookTestBase:
         self.git_no_hooks("reset", "--hard", "HEAD")
 
     def expected_policy_hint_path(self) -> str:
-        path = (self.config_dir / "contribution.md").resolve()
-        display_root = os.environ.get("GFG_POLICY_DISPLAY_ROOT")
-        if not display_root:
-            return str(path)
-
-        source_root = Path(os.environ.get("GFG_POLICY_SOURCE_ROOT", str(Path.cwd()))).resolve()
-        try:
-            relative = path.relative_to(source_root)
-        except ValueError:
-            return str(path)
-        return str(Path(display_root) / relative)
+        return str((self.repo / ".git-flow-guard" / "contribution.md").resolve())
 
     def write_file(self, filename: str, content: str) -> None:
         path = self.repo / filename
