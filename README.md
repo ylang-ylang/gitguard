@@ -38,13 +38,12 @@ Each policy config lives under `configs/<name>/`:
 ```text
 configs/<name>/
   contribution.md
-  policy.yaml
   test_case.py
 ```
 
 `contribution.md` is the source of truth. It contains one supported Mermaid `gitGraph` block.
 
-`policy.yaml` is an optional generated snapshot from `contribution.md`. The installer generates the runtime policy automatically, so users normally maintain only `contribution.md`.
+`policy.json` is generated during installation and copied into the target repository under `.git-flow-guard/`. The hook runtime reads this file directly.
 
 `test_case.py` contains config-specific hook behavior tests. Shared test scaffolding lives in `configs/test_base.py`, which only provides generic Git helpers, hook installation, ref snapshots, and rejection assertions. Policy-specific DAG construction and rejection cases belong in each config.
 
@@ -118,9 +117,22 @@ It copies the packaged runtime hook into the target repo:
 
 ```text
 <repo>/.git-flow-guard/contribution.md
+<repo>/.git-flow-guard/enable.sh
 <repo>/.git-flow-guard/hooks/reference-transaction
-<repo>/.git-flow-guard/policy.yaml
+<repo>/.git-flow-guard/policy.json
 <repo>/.git-flow-guard/runtime/policy_reference_transaction_hook.py
+```
+
+After a protected repository is cloned, users do not need to install this Python package just to enable the checked-in hook. They can run:
+
+```bash
+./.git-flow-guard/enable.sh
+```
+
+`enable.sh` only writes local Git config for the current worktree:
+
+```text
+core.hooksPath=.git-flow-guard/hooks
 ```
 
 When a Git operation is rejected, the hook prints a `see policy:` hint pointing at `<repo>/.git-flow-guard/contribution.md`. This gives humans and agents a local Markdown file to inspect and repair.
@@ -135,7 +147,6 @@ git-flow-guard: see policy: <repo>/.git-flow-guard/contribution.md
 Runtime state is stored in the target repo's Git directory:
 
 ```text
-<repo>/.git/git-flow-guard-policy.json
 <repo>/.git/git-flow-guard-state.json
 <repo>/.git/git-flow-guard-hook.log
 ```
@@ -150,7 +161,6 @@ Run package-level checks without installation:
 PYTHONPATH=src python -m py_compile \
   src/git_flow_guard/__init__.py \
   src/git_flow_guard/cli.py \
-  src/git_flow_guard/generate.py \
   src/git_flow_guard/install.py \
   src/git_flow_guard/mermaid.py \
   src/git_flow_guard/runtime/reference_transaction_hook.py \

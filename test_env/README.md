@@ -36,7 +36,9 @@ PYTHONPATH=src python -m git_flow_guard.cli install --repo .tmp/<config_name> --
 
 If you installed the isolated uv tool, use `git-flow-guard` in place of `PYTHONPATH=src python -m git_flow_guard.cli`.
 
-The installed contribution document, hook wrapper, generated policy snapshot, and Python runner live inside each generated test repository under `.git-flow-guard/`. This keeps the generated repo usable from both Docker and the host, because `core.hooksPath` does not point at `/workspace/test_env/...`.
+The installed contribution document, enable script, hook wrapper, runtime `policy.json`, and Python runner live inside each generated test repository under `.git-flow-guard/`. This keeps the generated repo usable from both Docker and the host, because `core.hooksPath` does not point at `/workspace/test_env/...`.
+
+The generated `enable.sh` is intentionally small: it only enables the checked-in hook for the current worktree by setting `core.hooksPath=.git-flow-guard/hooks`.
 
 Hook rejection messages must include a policy hint that points at the generated repo's local Markdown file:
 

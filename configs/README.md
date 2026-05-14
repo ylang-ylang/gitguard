@@ -6,8 +6,4 @@ Required files:
 
 - `contribution.md`: Mermaid `gitGraph` policy source.
 
-Optional files:
-
-- `policy.yaml`: generated review snapshot from `contribution.md`.
-
-Maintain `contribution.md` by hand. The installer parses it directly and writes the runtime policy into the target repository.
+Maintain `contribution.md` by hand. The installer parses it and writes `.git-flow-guard/policy.json` into the target repository for the hook runtime.

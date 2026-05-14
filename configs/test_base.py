@@ -75,6 +75,25 @@ class PolicyHookTestBase:
 
     def install_hook(self) -> None:
         install_policy_hook(self.repo, self.config_dir, scope="worktree")
+        expected_files = [
+            self.repo / ".git-flow-guard" / "contribution.md",
+            self.repo / ".git-flow-guard" / "policy.json",
+            self.repo / ".git-flow-guard" / "enable.sh",
+            self.repo / ".git-flow-guard" / "hooks" / "reference-transaction",
+            self.repo / ".git-flow-guard" / "runtime" / "policy_reference_transaction_hook.py",
+        ]
+        for path in expected_files:
+            if not path.exists():
+                raise AssertionError(f"{self.name}: installed file is missing: {path}")
+        if (self.repo / ".git-flow-guard" / "policy.yaml").exists():
+            raise AssertionError(f"{self.name}: policy.yaml should not be installed")
+        self.git_no_hooks("config", "--worktree", "--unset", "core.hooksPath", check=False)
+        result = self.run_command([".git-flow-guard/enable.sh"], check=True)
+        if "core.hooksPath=.git-flow-guard/hooks" not in result.stdout:
+            raise AssertionError(f"{self.name}: enable.sh did not report hook path\nstdout:\n{result.stdout}")
+        hook_path = self.git_no_hooks("config", "--worktree", "--get", "core.hooksPath").stdout.strip()
+        if hook_path != ".git-flow-guard/hooks":
+            raise AssertionError(f"{self.name}: enable.sh set unexpected hooksPath: {hook_path}")
 
     def expect_rejected(
         self,
@@ -185,15 +204,22 @@ class PolicyHookTestBase:
     def git_no_hooks(self, *args: str, check: bool = True) -> CommandResult:
         return git_raw(self.repo, "-c", "core.hooksPath=.git/hooks", *args, check=check)
 
+    def run_command(self, args: list[str], check: bool = True) -> CommandResult:
+        return run_raw(self.repo, args, check=check)
+
 
 def git_raw(cwd: Path, *args: str, check: bool = True) -> CommandResult:
+    return run_raw(cwd, ["git", *args], check=check)
+
+
+def run_raw(cwd: Path, args: list[str], check: bool = True) -> CommandResult:
     env = os.environ.copy()
     env.setdefault("GIT_AUTHOR_NAME", "Policy Hook Test")
     env.setdefault("GIT_AUTHOR_EMAIL", "policy-hook-test@example.invalid")
     env.setdefault("GIT_COMMITTER_NAME", "Policy Hook Test")
     env.setdefault("GIT_COMMITTER_EMAIL", "policy-hook-test@example.invalid")
     result = subprocess.run(
-        ["git", *args],
+        args,
         cwd=str(cwd),
         env=env,
         text=True,
@@ -204,6 +230,6 @@ def git_raw(cwd: Path, *args: str, check: bool = True) -> CommandResult:
     wrapped = CommandResult(result.returncode, result.stdout, result.stderr)
     if check and result.returncode != 0:
         raise AssertionError(
-            f"git {' '.join(args)} failed in {cwd}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            f"{' '.join(args)} failed in {cwd}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return wrapped

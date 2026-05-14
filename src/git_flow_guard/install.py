@@ -9,7 +9,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from git_flow_guard.generate import render_policy_yaml
 from git_flow_guard.mermaid import PolicyParseError, load_policy_from_markdown
 
 
@@ -62,7 +61,6 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
 
     git_dir = resolved_git_dir(repo)
     contribution_path = resolve_config(config)
-    rendered_policy_yaml = render_policy_yaml(contribution_path)
     policy = load_policy_from_markdown(contribution_path)
 
     install_dir = repo / ".git-flow-guard"
@@ -83,26 +81,28 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
         runtime_runner.write_text(load_runtime_hook_text(), encoding="utf-8")
     runtime_runner.chmod(0o755)
 
-    policy_path = git_dir / "git-flow-guard-policy.json"
-    policy_yaml_path = repo / ".git-flow-guard" / "policy.yaml"
+    policy_path = install_dir / "policy.json"
     state_path = git_dir / "git-flow-guard-state.json"
     log_path = git_dir / "git-flow-guard-hook.log"
     policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True), encoding="utf-8")
-    policy_yaml_path.write_text(rendered_policy_yaml, encoding="utf-8")
 
     hook_path = hook_dir / "reference-transaction"
     hook_path.write_text(reference_transaction_hook(), encoding="utf-8")
     hook_path.chmod(0o755)
+
+    enable_path = install_dir / "enable.sh"
+    enable_path.write_text(enable_script(), encoding="utf-8")
+    enable_path.chmod(0o755)
 
     configure_hooks_path(repo, scope)
     print(f"installed git-flow-guard hook into {repo}")
     print(f"scope={scope}")
     print("core.hooksPath=.git-flow-guard/hooks")
     print(f"contribution={installed_contribution_path}")
-    print(f"generated={policy_yaml_path}")
     print(f"policy={policy_path}")
     print(f"state={state_path}")
     print(f"log={log_path}")
+    print(f"enable={enable_path}")
 
 
 def reference_transaction_hook() -> str:
@@ -117,10 +117,26 @@ def reference_transaction_hook() -> str:
             '  *) resolved_git_dir="$repo_root/$git_dir" ;;',
             "esac",
             'export GFG_REPO_PATH="$repo_root"',
-            'export GFG_POLICY_JSON="$resolved_git_dir/git-flow-guard-policy.json"',
+            'export GFG_POLICY_JSON="$repo_root/.git-flow-guard/policy.json"',
             'export GFG_STATE_JSON="$resolved_git_dir/git-flow-guard-state.json"',
             'export GFG_LOG_PATH="$resolved_git_dir/git-flow-guard-hook.log"',
             'exec python3 "$repo_root/.git-flow-guard/runtime/policy_reference_transaction_hook.py" "$@"',
+            "",
+        ]
+    )
+
+
+def enable_script() -> str:
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -eu",
+            'repo_root="$(git rev-parse --show-toplevel)"',
+            'cd "$repo_root"',
+            "git config extensions.worktreeConfig true",
+            "git config --worktree core.hooksPath .git-flow-guard/hooks",
+            'printf "%s\\n" "enabled git-flow-guard hooks for $repo_root"',
+            'printf "%s\\n" "core.hooksPath=.git-flow-guard/hooks"',
             "",
         ]
     )

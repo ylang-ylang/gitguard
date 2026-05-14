@@ -17,4 +17,4 @@ Remaining useful work:
 - Add package build verification in CI, including isolated `uv tool install --editable .` or venv-based editable install.
 - Add an uninstall command to remove `.git-flow-guard/` and unset `core.hooksPath`.
 - Add a command that prints the resolved policy for a config without writing files.
-- Decide whether generated `policy.yaml` should remain checked in as a review artifact.
+- Add a CI check that verifies `.git-flow-guard/policy.json` is current with `.git-flow-guard/contribution.md`.
