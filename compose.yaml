@@ -8,6 +8,8 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONPATH: "/workspace/src"
+      GFG_POLICY_SOURCE_ROOT: "/workspace"
+      GFG_POLICY_DISPLAY_ROOT: "${PWD}"
     volumes:
       - type: bind
         source: .
@@ -31,6 +33,8 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONPATH: "/workspace/src"
+      GFG_POLICY_SOURCE_ROOT: "/workspace"
+      GFG_POLICY_DISPLAY_ROOT: "${PWD}"
     volumes:
       - type: bind
         source: .

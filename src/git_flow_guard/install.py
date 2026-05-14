@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.resources
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -61,6 +62,7 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
     git_dir = resolved_git_dir(repo)
     contribution_path = resolve_config(config)
     policy = load_policy_from_markdown(contribution_path)
+    policy.setdefault("source", {})["path"] = display_policy_path(contribution_path)
 
     hook_dir = repo / ".git-flow-guard" / "hooks"
     runtime_dir = repo / ".git-flow-guard" / "runtime"
@@ -148,6 +150,19 @@ def resolve_config(config: str | Path) -> Path:
             return contribution
 
     raise InstallError(f"cannot resolve config: {config}")
+
+
+def display_policy_path(path: Path) -> str:
+    display_root = os.environ.get("GFG_POLICY_DISPLAY_ROOT")
+    if not display_root:
+        return str(path)
+
+    source_root = Path(os.environ.get("GFG_POLICY_SOURCE_ROOT", str(PROJECT_ROOT))).resolve()
+    try:
+        relative = path.resolve().relative_to(source_root)
+    except ValueError:
+        return str(path)
+    return str(Path(display_root) / relative)
 
 
 def load_runtime_hook_text() -> str:

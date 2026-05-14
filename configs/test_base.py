@@ -101,6 +101,12 @@ class PolicyHookTestBase:
                 f"{self.name}: expected rejection containing {expected!r} for git {' '.join(args)}\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
+        expected_policy_hint = f"see policy: {self.expected_policy_hint_path()}"
+        if expected_policy_hint not in combined:
+            raise AssertionError(
+                f"{self.name}: expected rejection to include policy hint {expected_policy_hint!r} "
+                f"for git {' '.join(args)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
 
         if after.refs != before.refs:
             raise AssertionError(
@@ -131,6 +137,19 @@ class PolicyHookTestBase:
     def cleanup_merge_state(self) -> None:
         self.git_no_hooks("merge", "--abort", check=False)
         self.git_no_hooks("reset", "--hard", "HEAD")
+
+    def expected_policy_hint_path(self) -> str:
+        path = (self.config_dir / "contribution.md").resolve()
+        display_root = os.environ.get("GFG_POLICY_DISPLAY_ROOT")
+        if not display_root:
+            return str(path)
+
+        source_root = Path(os.environ.get("GFG_POLICY_SOURCE_ROOT", str(Path.cwd()))).resolve()
+        try:
+            relative = path.relative_to(source_root)
+        except ValueError:
+            return str(path)
+        return str(Path(display_root) / relative)
 
     def write_file(self, filename: str, content: str) -> None:
         path = self.repo / filename

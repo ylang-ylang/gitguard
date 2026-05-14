@@ -58,6 +58,9 @@ def main() -> int:
             raise HookReject(f"unsupported reference-transaction phase: {phase}")
     except HookReject as exc:
         print(f"git-flow-guard: {exc}", file=sys.stderr)
+        source_path = policy.get("source", {}).get("path")
+        if source_path:
+            print(f"git-flow-guard: see policy: {source_path}", file=sys.stderr)
         return 1
 
     return 0
