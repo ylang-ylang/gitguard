@@ -18,7 +18,9 @@ The runtime target is Git's native `reference-transaction` hook. The hook should
 - Treat `checkout TARGET` followed by `merge SOURCE` as a required merge/containment edge: `SOURCE to TARGET`.
 - Treat a source merged to multiple targets as a multi-target integration requirement.
 - Treat tags on `main` merge statements as release confirmation points.
-- Parse `tag:"v#.#.0"` and `tag:"v#.#.#"` on merge statements as numeric tag policies from the graph itself.
+- Parse `tag:"v#.#.0"` and `tag:"v=.=.#"` on merge statements as numeric tag policies from the graph itself.
+- Interpret `#` as one or more decimal digits.
+- Interpret `=` as the same numeric component as the base release tag for the source branch.
 
 ## Generated Policy
 
@@ -48,7 +50,7 @@ git config --worktree core.hooksPath .githooks
 
 ## Skill
 
-- Keep `skills/git-flow-policy-writer/SKILL.md` focused on authoring compatible `CONTRIBUTING.md` gitGraph docs.
+- Keep `.codex/skills/git-flow-policy-writer/SKILL.md` focused on authoring compatible `CONTRIBUTING.md` gitGraph docs.
 - Do not put runtime implementation details into the skill unless they affect the authoring rules.
 
 ## Tests
@@ -65,4 +67,4 @@ git config --worktree core.hooksPath .githooks
   - allow source family updates that satisfy the generated policy
   - require release/hotfix source containment in all required targets before tagged main merge confirmation
   - reject release tags that do not match `v#.#.0`
-  - reject hotfix tags that do not match `v#.#.#`
+  - reject hotfix tags that do not match `v=.=.#`

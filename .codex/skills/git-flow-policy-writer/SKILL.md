@@ -28,8 +28,9 @@ Write `CONTRIBUTING.md` branch workflow docs where the Mermaid `gitGraph` is a r
 - Put release/hotfix tag symbols directly on the `main` merge statement.
 - Use tag patterns directly in `tag:"..."` so the graph remains the source of truth:
   - release main merge: `tag:"v#.#.0"`
-  - hotfix main merge: `tag:"v#.#.#"`
+  - hotfix main merge: `tag:"v=.=.#"`
 - Interpret `#` in tag patterns as one or more decimal digits.
+- Interpret `=` in tag patterns as the same numeric component as the base release tag for this source branch.
 
 ## Preferred Graph Shape
 
@@ -69,7 +70,7 @@ gitGraph TB:
     checkout dev
     merge "hotfix/*" id:"hotfix/* to dev"
     checkout main
-    merge "hotfix/*" id:"hotfix/* to main" tag:"v#.#.#"
+    merge "hotfix/*" id:"hotfix/* to main" tag:"v=.=.#"
 ```
 
 ## Validation Checklist
@@ -78,6 +79,6 @@ gitGraph TB:
 - Confirm every `merge` has an `id:"SOURCE to TARGET"` label that matches the merge statement.
 - Confirm `release/*` and `hotfix/*` merge into both `main` and `dev`.
 - Confirm release/hotfix tag symbols are attached to their `main` merge statements.
-- Confirm tag patterns are explicit numeric patterns: release uses `v#.#.0`, hotfix uses `v#.#.#`.
+- Confirm tag patterns are explicit numeric patterns: release uses `v#.#.0`, hotfix uses `v=.=.#`.
 - Confirm there are no example-only branch names if the policy is intended to cover a full family.
 - Confirm the accompanying prose and any flowchart do not contradict the `gitGraph`.

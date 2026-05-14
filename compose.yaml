@@ -1,0 +1,44 @@
+services:
+  policy-hook-tests:
+    image: git-flow-guard-test-env
+    build:
+      context: .
+      dockerfile: test_env/Dockerfile
+    working_dir: /workspace
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: "/workspace/src"
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ./.tmp
+        target: /workspace/.tmp
+    command:
+      - python3
+      - test_env/run_policy_hook_tests.py
+      - --work-root
+      - /workspace/.tmp
+
+  reference-transaction-smoke:
+    image: git-flow-guard-test-env
+    build:
+      context: .
+      dockerfile: test_env/Dockerfile
+    working_dir: /workspace
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: "/workspace/src"
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ./.tmp
+        target: /workspace/.tmp
+    command:
+      - bash
+      - test_env/run_reference_transaction_smoke.sh
