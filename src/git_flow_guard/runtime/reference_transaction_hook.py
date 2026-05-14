@@ -286,7 +286,7 @@ def tag_rule_allows_version(
     rule: dict[str, Any],
     source_ref: str,
     tag_ref: str,
-    tag_version: tuple[int, int, int],
+    tag_version: tuple[int, ...],
 ) -> bool:
     tokens = rule.get("tag_tokens", [])
     if not tag_tokens_match(tokens, tag_version):
@@ -335,8 +335,8 @@ def preferred_tag_failure(failures: list[HookReject], tag_ref: str) -> HookRejec
     return min(failures, key=lambda failure: priority.get(failure.code, 100))
 
 
-def tag_tokens_match(tokens: list[str], version: tuple[int, int, int]) -> bool:
-    if len(tokens) != 3:
+def tag_tokens_match(tokens: list[str], version: tuple[int, ...]) -> bool:
+    if len(tokens) != len(version):
         return False
     for token, component in zip(tokens, version):
         if token in {"#", "="}:
@@ -346,8 +346,8 @@ def tag_tokens_match(tokens: list[str], version: tuple[int, int, int]) -> bool:
     return True
 
 
-def max_existing_version(repo: Path, major: int | None = None, minor: int | None = None) -> tuple[int, int, int] | None:
-    versions: list[tuple[int, int, int]] = []
+def max_existing_version(repo: Path, major: int | None = None, minor: int | None = None) -> tuple[int, ...] | None:
+    versions: list[tuple[int, ...]] = []
     for ref in git(repo, "for-each-ref", "--format=%(refname)", "refs/tags").stdout.splitlines():
         try:
             version = parse_version_ref(ref)
@@ -364,13 +364,13 @@ def max_existing_version(repo: Path, major: int | None = None, minor: int | None
 
 
 def latest_reachable_release_tag(repo: Path, commit: str) -> str | None:
-    tags: list[tuple[tuple[int, int, int], str]] = []
+    tags: list[tuple[tuple[int, ...], str]] = []
     for ref in git(repo, "for-each-ref", "--format=%(refname)", "refs/tags").stdout.splitlines():
         try:
             version = parse_version_ref(ref)
         except HookReject:
             continue
-        if version[2] != 0:
+        if len(version) != 3 or version[2] != 0:
             continue
         if is_ancestor(repo, ref, commit):
             tags.append((version, ref.removeprefix("refs/tags/")))
@@ -379,17 +379,17 @@ def latest_reachable_release_tag(repo: Path, commit: str) -> str | None:
     return max(tags)[1]
 
 
-def parse_version_ref(ref: str) -> tuple[int, int, int]:
+def parse_version_ref(ref: str) -> tuple[int, ...]:
     if ref.startswith("refs/tags/"):
         return parse_version_name(ref.removeprefix("refs/tags/"))
     return parse_version_name(ref)
 
 
-def parse_version_name(name: str) -> tuple[int, int, int]:
-    match = re.fullmatch(r"v([0-9]+)\.([0-9]+)\.([0-9]+)", name)
+def parse_version_name(name: str) -> tuple[int, ...]:
+    match = re.fullmatch(r"[vV]([0-9]+)\.([0-9]+)(?:\.([0-9]+))?", name)
     if not match:
         raise HookReject("TAG_VERSION_INVALID", tag=name)
-    return tuple(int(part) for part in match.groups())
+    return tuple(int(part) for part in match.groups() if part is not None)
 
 
 def enforce_pending_lock(repo: Path, pending: dict[str, Any], update: RefUpdate) -> None:
@@ -583,10 +583,10 @@ def short_sha(value: str | None) -> str | None:
     return value[:12]
 
 
-def format_version(version: tuple[int, int, int] | None) -> str | None:
+def format_version(version: tuple[int, ...] | None) -> str | None:
     if version is None:
         return None
-    return f"v{version[0]}.{version[1]}.{version[2]}"
+    return "v" + ".".join(str(part) for part in version)
 
 
 if __name__ == "__main__":

@@ -74,10 +74,12 @@ Tag patterns currently support:
 
 - `#`: one or more decimal digits.
 - `=`: same numeric component as the source branch's base release tag.
+- two-component or three-component tags with a `v` or `V` prefix.
 
 Examples:
 
 ```text
+V#.#
 v#.#.0
 v=.=.#
 ```
@@ -167,6 +169,7 @@ PYTHONPATH=src python -m py_compile \
   test_env/run_policy_hook_tests.py \
   configs/__init__.py \
   configs/test_base.py \
+  configs/dev-only/test_case.py \
   configs/basic-feature-release/test_case.py \
   configs/infra-feat-release/test_case.py
 ```
@@ -183,6 +186,7 @@ The integration test runner creates one isolated test repo per config:
 
 ```text
 .tmp/basic-feature-release
+.tmp/dev-only
 .tmp/infra-feat-release
 ```
 

@@ -211,10 +211,10 @@ def tag_regex(pattern: str) -> str:
 
 
 def tag_tokens(pattern: str) -> list[str]:
-    match = re.fullmatch(r"v([#=0-9]+)\.([#=0-9]+)\.([#=0-9]+)", pattern)
+    match = re.fullmatch(r"[vV]([#=0-9]+)\.([#=0-9]+)(?:\.([#=0-9]+))?", pattern)
     if not match:
-        raise PolicyParseError(f'Unsupported tag pattern "{pattern}". Expected SemVer-like v#.#.0 or v=.=.#.')
-    return list(match.groups())
+        raise PolicyParseError(f'Unsupported tag pattern "{pattern}". Expected v#.#.0, v=.=.#, or V#.#.')
+    return [part for part in match.groups() if part is not None]
 
 
 def dump_yaml(data: Any) -> str:
