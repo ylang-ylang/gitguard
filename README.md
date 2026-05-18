@@ -146,6 +146,8 @@ git-flow-guard: TAG_REQUIRED_TARGETS_MISSING tag=refs/tags/v1.2.0 target=abc123 
 git-flow-guard: see policy: <repo>/.git-flow-guard/contribution.md
 ```
 
+For `merge ... tag:"..."` rules, Git Flow Guard treats the branch merge and tag creation as separate Git ref transactions. The merge may complete first, then the hook records a pending tag requirement. Until the matching tag is created, the same tagged merge rule is blocked with `PENDING_TAG_REQUIRED`, and the already-merged source ref is locked with `PENDING_TAG_SOURCE_MOVED`. Other allowed merge rules, such as `dev to main`, are not blocked by that pending release tag.
+
 Runtime state is stored in the target repo's Git directory:
 
 ```text
@@ -170,6 +172,7 @@ PYTHONPATH=src python -m py_compile \
   configs/__init__.py \
   configs/test_base.py \
   configs/dev-only/test_case.py \
+  configs/dev-main-release/test_case.py \
   configs/basic-feature-release/test_case.py \
   configs/infra-feat-release/test_case.py
 ```
@@ -186,6 +189,7 @@ The integration test runner creates one isolated test repo per config:
 
 ```text
 .tmp/basic-feature-release
+.tmp/dev-main-release
 .tmp/dev-only
 .tmp/infra-feat-release
 ```

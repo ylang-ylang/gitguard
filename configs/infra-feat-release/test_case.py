@@ -35,8 +35,8 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.create_infra_reject_to_main_fixture()
         self.create_feat_reject_to_main_fixture()
         self.create_release_reject_main_before_dev_fixture()
-        self.create_old_release_fixture()
         self.create_hotfix_wrong_line_fixture()
+        self.create_old_release_fixture()
 
     def mark_rejection_tests_start(self) -> None:
         branch = "feat/rejection-boundary"
@@ -144,6 +144,7 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.old_release_sha = self.commit_file(branch, "release-0.9.txt", "release 0.9\n", "fixture release 0.9")
         self.merge_to(branch, "dev")
         self.merge_to(branch, "main")
+        self.tag("v1.2.0", self.old_release_sha)
 
     def create_hotfix_wrong_line_fixture(self) -> None:
         branch = "hotfix/wrong-line"

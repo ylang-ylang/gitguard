@@ -58,6 +58,7 @@ For example:
 
 ```text
 .tmp/basic-feature-release
+.tmp/dev-main-release
 .tmp/infra-feat-release
 ```
 
@@ -93,6 +94,8 @@ The policy integration tests cover:
 - rejecting a release commit tagged with a hotfix-style tag;
 - rejecting hotfix tags that change the base release line's major or minor component;
 - rejecting multi-target source branches when they are merged to targets out of policy order;
+- rejecting later same-rule tagged merges while an earlier tagged merge is missing its tag;
+- accepting other allowed merge rules while a tagged merge is waiting for its tag;
 - accepting the normal configured branch families, required merge targets, and tag rules before the separator.
 
 Not yet covered by the generated Mermaid policy alone:

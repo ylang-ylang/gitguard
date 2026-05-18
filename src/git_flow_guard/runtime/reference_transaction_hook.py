@@ -90,7 +90,9 @@ def main() -> int:
 
 
 def validate_prepared(repo: Path, policy: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
-    pending = load_state(state_path).get("pending", {})
+    state = load_state(state_path)
+    pending = state.get("pending", {})
+    pending_tags = state.get("pending_tags", {})
     proposed = {update.ref: update.new for update in updates if update.new != ZERO}
 
     for update in updates:
@@ -101,6 +103,7 @@ def validate_prepared(repo: Path, policy: dict[str, Any], state_path: Path, upda
             validate_branch_name(policy, update.ref)
 
         enforce_pending_lock(repo, pending, update)
+        enforce_pending_tag_lock(repo, policy, pending_tags, update)
 
         if update.ref.startswith("refs/tags/"):
             validate_tag(repo, policy, proposed, update)
@@ -192,7 +195,16 @@ def source_candidates_for_target(repo: Path, policy: dict[str, Any], update: Ref
             sha = rev_parse(repo, ref)
             if is_ancestor(repo, sha, update.new) and not is_ancestor(repo, sha, update.old):
                 candidates.append(SourceCandidate(ref=ref, sha=sha, rule=rule))
-    return candidates
+    return maximal_source_candidates(repo, candidates)
+
+
+def maximal_source_candidates(repo: Path, candidates: list[SourceCandidate]) -> list[SourceCandidate]:
+    maximal = []
+    for candidate in candidates:
+        if any(candidate.sha != other.sha and is_ancestor(repo, candidate.sha, other.sha) for other in candidates):
+            continue
+        maximal.append(candidate)
+    return maximal
 
 
 def validate_tag(repo: Path, policy: dict[str, Any], proposed: dict[str, str], update: RefUpdate) -> None:
@@ -428,9 +440,45 @@ def enforce_pending_lock(repo: Path, pending: dict[str, Any], update: RefUpdate)
             )
 
 
+def enforce_pending_tag_lock(
+    repo: Path,
+    policy: dict[str, Any],
+    pending_tags: dict[str, Any],
+    update: RefUpdate,
+) -> None:
+    if not pending_tags or not update.ref.startswith("refs/heads/"):
+        return
+
+    for _, item in pending_tag_items(pending_tags):
+        source_sha = item["source_sha"]
+        if update.ref == item["source_ref"] and update.new != source_sha:
+            raise HookReject(
+                "PENDING_TAG_SOURCE_MOVED",
+                source_ref=item["source_ref"],
+                expected_sha=short_sha(source_sha),
+                new=short_sha(update.new),
+                target_ref=item["target_ref"],
+                tag_pattern=item["tag_pattern"],
+            )
+
+        if update.ref != item["target_ref"] or update.new == ZERO:
+            continue
+
+        for candidate in source_candidates_for_target(repo, policy, update):
+            if pending_tag_matches_rule(item, candidate.rule):
+                raise HookReject(
+                    "PENDING_TAG_REQUIRED",
+                    source_ref=item["source_ref"],
+                    source_sha=short_sha(source_sha),
+                    target_ref=item["target_ref"],
+                    tag_pattern=item["tag_pattern"],
+                )
+
+
 def update_committed_state(repo: Path, policy: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
     state = load_state(state_path)
     pending = state.setdefault("pending", {})
+    pending_tags = state.setdefault("pending_tags", {})
     branch_bases = state.setdefault("branch_bases", {})
 
     for update in updates:
@@ -451,6 +499,8 @@ def update_committed_state(repo: Path, policy: dict[str, Any], state_path: Path,
             continue
 
         candidate = candidates[0]
+        update_pending_tags(repo, pending_tags, candidate)
+
         required = required_target_refs(policy, candidate.rule["source"])
         if len(required) <= 1:
             continue
@@ -466,7 +516,64 @@ def update_committed_state(repo: Path, policy: dict[str, Any], state_path: Path,
                 "remaining_target_refs": [ref for ref in required if ref not in completed],
             }
 
+    clear_satisfied_pending_tags(pending_tags, updates)
     save_state(state_path, state)
+
+
+def update_pending_tags(repo: Path, pending_tags: dict[str, Any], candidate: SourceCandidate) -> None:
+    rule = candidate.rule
+    tag_pattern = rule.get("tag_pattern")
+    tag_ref_regex = rule.get("tag_ref_regex")
+    if not tag_pattern or not tag_ref_regex:
+        return
+
+    key = pending_tag_key(candidate.ref, rule["target_ref"], tag_pattern)
+    if matching_tag_exists(repo, tag_ref_regex, candidate.sha):
+        pending_tags.pop(key, None)
+        return
+
+    pending_tags[key] = {
+        "source": rule["source"],
+        "target": rule["target"],
+        "source_ref": candidate.ref,
+        "source_sha": candidate.sha,
+        "target_ref": rule["target_ref"],
+        "merge_rule_id": rule["id"],
+        "tag_pattern": tag_pattern,
+        "tag_ref_regex": tag_ref_regex,
+    }
+
+
+def clear_satisfied_pending_tags(pending_tags: dict[str, Any], updates: list[RefUpdate]) -> None:
+    for update in updates:
+        if not update.ref.startswith("refs/tags/") or update.new == ZERO:
+            continue
+        for key, item in pending_tag_items(pending_tags):
+            if update.new == item["source_sha"] and re.match(item["tag_ref_regex"], update.ref):
+                pending_tags.pop(key, None)
+
+
+def pending_tag_key(source_ref: str, target_ref: str, tag_pattern: str) -> str:
+    return "|".join([source_ref, target_ref, tag_pattern])
+
+
+def pending_tag_items(pending_tags: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    return [(key, item) for key, item in pending_tags.items() if isinstance(item, dict)]
+
+
+def pending_tag_matches_rule(item: dict[str, Any], rule: dict[str, Any]) -> bool:
+    return (
+        item.get("source") == rule.get("source")
+        and item.get("target_ref") == rule.get("target_ref")
+        and item.get("tag_pattern") == rule.get("tag_pattern")
+    )
+
+
+def matching_tag_exists(repo: Path, tag_ref_regex: str, target_sha: str) -> bool:
+    for ref in git(repo, "for-each-ref", "--format=%(refname)", "refs/tags").stdout.splitlines():
+        if re.match(tag_ref_regex, ref) and rev_parse(repo, ref) == target_sha:
+            return True
+    return False
 
 
 def required_target_refs(policy: dict[str, Any], source_pattern: str) -> list[str]:
@@ -505,7 +612,7 @@ def append_log(path: Path, phase: str, updates: list[RefUpdate]) -> None:
 
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"pending": {}}
+        return {"pending": {}, "pending_tags": {}}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
