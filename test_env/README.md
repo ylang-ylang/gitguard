@@ -57,9 +57,9 @@ Each config gets a separate test directory:
 For example:
 
 ```text
-.tmp/basic-feature-release
-.tmp/dev-main-release
-.tmp/infra-feat-release
+.tmp/dev-feat-release-hotfix
+.tmp/dev-infra-feat-release-hotfix
+.tmp/dev-release
 ```
 
 Each config test repo is built by a config-specific test class that inherits from the shared policy hook test base:

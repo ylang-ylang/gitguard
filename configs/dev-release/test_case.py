@@ -10,7 +10,7 @@ START_SYMBOL = "=========== GIT FLOW GUARD REJECTION TESTS START ==========="
 
 
 class DevMainReleaseHookTest(PolicyHookTestBase):
-    config_name = "dev-main-release"
+    config_name = "dev-release"
 
     def create_initial_repo(self) -> None:
         self.git("init", "-b", "main")

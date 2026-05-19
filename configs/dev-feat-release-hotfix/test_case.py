@@ -7,7 +7,7 @@ START_SYMBOL = "=========== GIT FLOW GUARD REJECTION TESTS START ==========="
 
 
 class BasicFeatureReleaseHookTest(PolicyHookTestBase):
-    config_name = "basic-feature-release"
+    config_name = "dev-feat-release-hotfix"
 
     def create_initial_repo(self) -> None:
         self.git("init", "-b", "main")

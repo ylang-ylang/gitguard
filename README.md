@@ -91,13 +91,13 @@ Install one config into a target repository:
 ```bash
 PYTHONPATH=src python -m git_flow_guard.cli install \
   --repo /path/to/repo \
-  --config infra-feat-release \
+  --config dev-infra-feat-release-hotfix \
   --scope worktree
 ```
 
 `--config` accepts:
 
-- a bundled config name under `configs/`, for example `infra-feat-release`;
+- a bundled config name under `configs/`, for example `dev-infra-feat-release-hotfix`;
 - a config directory containing `contribution.md`;
 - a direct path to `contribution.md`.
 
@@ -172,9 +172,9 @@ PYTHONPATH=src python -m py_compile \
   configs/__init__.py \
   configs/test_base.py \
   configs/dev-only/test_case.py \
-  configs/dev-main-release/test_case.py \
-  configs/basic-feature-release/test_case.py \
-  configs/infra-feat-release/test_case.py
+  configs/dev-release/test_case.py \
+  configs/dev-feat-release-hotfix/test_case.py \
+  configs/dev-infra-feat-release-hotfix/test_case.py
 ```
 
 Run integration tests in Docker:
@@ -188,10 +188,10 @@ docker compose down
 The integration test runner creates one isolated test repo per config:
 
 ```text
-.tmp/basic-feature-release
-.tmp/dev-main-release
+.tmp/dev-feat-release-hotfix
+.tmp/dev-infra-feat-release-hotfix
 .tmp/dev-only
-.tmp/infra-feat-release
+.tmp/dev-release
 ```
 
 Each test repo contains a valid example Git DAG, then a visible start marker before rejection tests:
