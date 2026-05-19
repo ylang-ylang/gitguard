@@ -32,6 +32,21 @@ class SourceCandidate:
     rule: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class PushUpdate:
+    local_ref: str
+    local_sha: str
+    remote_ref: str
+    remote_sha: str
+
+
+@dataclass(frozen=True)
+class LocalPolicyTag:
+    ref: str
+    object_sha: str
+    target_sha: str
+
+
 class HookReject(RuntimeError):
     def __init__(self, code: str, **context: Any) -> None:
         self.code = code
@@ -60,29 +75,40 @@ def format_context_value(value: Any) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: reference_transaction_hook.py <phase>", file=sys.stderr)
+    if len(sys.argv) < 2:
+        print("usage: reference_transaction_hook.py <phase|pre-push>", file=sys.stderr)
         return 2
 
-    phase = sys.argv[1]
+    command = sys.argv[1]
     repo = Path(required_env("GFG_REPO_PATH"))
     policy = json.loads(Path(required_env("GFG_POLICY_JSON")).read_text(encoding="utf-8"))
     state_path = Path(os.environ.get("GFG_STATE_JSON", repo / ".git" / "gfg-state.json"))
     log_path = os.environ.get("GFG_LOG_PATH")
-    updates = read_updates(sys.stdin)
-
-    if log_path:
-        append_log(Path(log_path), phase, updates)
 
     try:
-        if phase == "prepared":
+        if command == "pre-push":
+            if len(sys.argv) != 4:
+                raise HookReject("HOOK_PRE_PUSH_USAGE", argv=sys.argv[1:])
+            if os.environ.get("GFG_INTERNAL_TAG_SYNC") == "1":
+                return 0
+            validate_pre_push(repo, policy, sys.argv[2], sys.argv[3], read_push_updates(sys.stdin))
+            return 0
+
+        if len(sys.argv) != 2:
+            raise HookReject("HOOK_REFERENCE_TRANSACTION_USAGE", argv=sys.argv[1:])
+
+        updates = read_updates(sys.stdin)
+        if log_path:
+            append_log(Path(log_path), command, updates)
+
+        if command == "prepared":
             validate_prepared(repo, policy, state_path, updates)
-        elif phase == "committed":
+        elif command == "committed":
             update_committed_state(repo, policy, state_path, updates)
-        elif phase == "aborted":
+        elif command == "aborted":
             return 0
         else:
-            raise HookReject("HOOK_UNSUPPORTED_PHASE", phase=phase)
+            raise HookReject("HOOK_UNSUPPORTED_PHASE", phase=command)
     except HookReject as exc:
         print(f"git-flow-guard: {exc}", file=sys.stderr)
         source_path = policy.get("source", {}).get("path")
@@ -92,6 +118,98 @@ def main() -> int:
         return 1
 
     return 0
+
+
+def validate_pre_push(
+    repo: Path,
+    policy: dict[str, Any],
+    remote_name: str,
+    remote_url: str,
+    updates: list[PushUpdate],
+) -> None:
+    if not policy.get("tag_rules"):
+        return
+
+    remote = remote_name or remote_url
+    remote_tags = remote_tag_map(repo, remote)
+    pushed_tags = {update.local_ref for update in updates if update.local_ref.startswith("refs/tags/") and update.local_sha != ZERO}
+    missing_tags: list[LocalPolicyTag] = []
+
+    for tag in local_policy_tags(repo, policy):
+        remote_sha = remote_tags.get(tag.ref)
+        if remote_sha is None:
+            if tag.ref not in pushed_tags:
+                missing_tags.append(tag)
+            continue
+        if remote_sha != tag.object_sha:
+            raise HookReject(
+                "PUSH_TAG_CONFLICT",
+                tag=tag.ref,
+                remote=remote_name,
+                local=short_sha(tag.object_sha),
+                upstream=short_sha(remote_sha),
+            )
+
+    auto_push_missing_tags(repo, remote, remote_name, missing_tags)
+
+
+def local_policy_tags(repo: Path, policy: dict[str, Any]) -> list[LocalPolicyTag]:
+    tags: dict[str, LocalPolicyTag] = {}
+    for line in git(repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/tags").stdout.splitlines():
+        tag_ref, object_sha = line.split(" ", 1)
+        for rule in policy.get("tag_rules", []):
+            if not re.match(rule["tag_ref_regex"], tag_ref):
+                continue
+            target_sha = peeled_rev_parse(repo, tag_ref)
+            if tag_target_satisfies_rule(repo, policy, rule, target_sha):
+                tags[tag_ref] = LocalPolicyTag(ref=tag_ref, object_sha=object_sha, target_sha=target_sha)
+                break
+    return [tags[ref] for ref in sorted(tags)]
+
+
+def tag_target_satisfies_rule(repo: Path, policy: dict[str, Any], rule: dict[str, Any], target_sha: str) -> bool:
+    source_refs = refs_matching(repo, source_ref_regex(policy, rule["source"]))
+    if not any(rev_parse(repo, source_ref) == target_sha for source_ref in source_refs):
+        return False
+    return all(ref_contains(repo, target_ref, target_sha) for target_ref in required_target_refs(policy, rule["source"]))
+
+
+def remote_tag_map(repo: Path, remote: str) -> dict[str, str]:
+    result = git(repo, "ls-remote", "--tags", remote)
+    tags: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        sha, ref = line.split(None, 1)
+        if ref.endswith("^{}"):
+            continue
+        tags[ref] = sha
+    return tags
+
+
+def auto_push_missing_tags(repo: Path, remote: str, display_remote: str, tags: list[LocalPolicyTag]) -> None:
+    if not tags:
+        return
+
+    tag_refs = [tag.ref for tag in tags]
+    print(
+        "git-flow-guard: auto-pushing missing release tags "
+        f"remote={format_context_value(display_remote)} tags={format_context_value(tag_refs)}",
+        file=sys.stderr,
+    )
+    for tag in tags:
+        env = os.environ.copy()
+        env["GFG_INTERNAL_TAG_SYNC"] = "1"
+        result = git_with_env(repo, env, "push", remote, f"{tag.ref}:{tag.ref}", check=False)
+        if result.returncode != 0:
+            raise HookReject(
+                "PUSH_TAG_SYNC_FAILED",
+                tag=tag.ref,
+                remote=display_remote,
+                stderr=result.stderr.strip(),
+            )
+        print(
+            f"git-flow-guard: auto-pushed release tag tag={tag.ref} remote={format_context_value(display_remote)}",
+            file=sys.stderr,
+        )
 
 
 def validate_prepared(repo: Path, policy: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
@@ -115,24 +233,46 @@ def validate_prepared(repo: Path, policy: dict[str, Any], state_path: Path, upda
             continue
 
         if update.ref.startswith("refs/heads/") and update.old == ZERO:
-            validate_branch_creation(repo, policy, update)
+            validate_branch_creation_or_replacement(repo, policy, proposed, update)
             continue
+
+        if update.ref.startswith("refs/heads/") and update.ref not in set(policy.get("protected_refs", [])):
+            validate_managed_branch_update(repo, policy, update)
 
         if update.ref in set(policy.get("protected_refs", [])):
             validate_protected_target_update(repo, policy, proposed, update)
 
 
 def validate_branch_name(policy: dict[str, Any], ref: str) -> None:
-    allowed_refs = {f"refs/heads/{name}" for name in policy["branches"].get("long_lived", [])}
-    if ref in allowed_refs:
+    if is_allowed_branch_ref(policy, ref):
         return
-    for family in policy["branches"].get("families", []):
-        if matches_ref_pattern(f"refs/heads/{family}", ref):
-            return
     raise HookReject("BRANCH_NAME_NOT_ALLOWED", ref=ref)
 
 
-def validate_branch_creation(repo: Path, policy: dict[str, Any], update: RefUpdate) -> None:
+def is_allowed_branch_ref(policy: dict[str, Any], ref: str) -> bool:
+    allowed_refs = {f"refs/heads/{name}" for name in policy["branches"].get("long_lived", [])}
+    if ref in allowed_refs:
+        return True
+    for family in policy["branches"].get("families", []):
+        if matches_ref_pattern(f"refs/heads/{family}", ref):
+            return True
+    return False
+
+
+def validate_branch_creation_or_replacement(
+    repo: Path,
+    policy: dict[str, Any],
+    proposed: dict[str, str],
+    update: RefUpdate,
+) -> None:
+    if ref_exists(repo, update.ref):
+        existing = RefUpdate(old=rev_parse(repo, update.ref), new=update.new, ref=update.ref)
+        if update.ref in set(policy.get("protected_refs", [])):
+            validate_protected_target_update(repo, policy, proposed, existing)
+        else:
+            validate_managed_branch_update(repo, policy, existing)
+        return
+
     if update.ref in set(policy.get("protected_refs", [])):
         return
 
@@ -145,6 +285,51 @@ def validate_branch_creation(repo: Path, policy: dict[str, Any], update: RefUpda
         raise HookReject("BRANCH_SOURCE_MISSING", ref=update.ref, source_ref=source_ref)
     if rev_parse(repo, source_ref) != update.new:
         raise HookReject("BRANCH_SOURCE_MISMATCH", ref=update.ref, source_ref=source_ref, new=short_sha(update.new))
+
+
+def validate_managed_branch_update(repo: Path, policy: dict[str, Any], update: RefUpdate) -> None:
+    if update.new == ZERO:
+        return
+    if not is_ancestor(repo, update.old, update.new):
+        raise HookReject("MANAGED_BRANCH_NON_FAST_FORWARD", ref=update.ref, old=short_sha(update.old), new=short_sha(update.new))
+
+    for source_ref in introduced_policy_branch_heads(repo, policy, update):
+        if merge_rule_allows_source(policy, source_ref, update.ref):
+            continue
+        raise HookReject(
+            "MANAGED_BRANCH_SOURCE_NOT_ALLOWED",
+            ref=update.ref,
+            source_ref=source_ref,
+            old=short_sha(update.old),
+            new=short_sha(update.new),
+        )
+
+
+def introduced_policy_branch_heads(repo: Path, policy: dict[str, Any], update: RefUpdate) -> list[str]:
+    heads: list[tuple[str, str]] = []
+    for ref in git(repo, "for-each-ref", "--format=%(refname)", "refs/heads").stdout.splitlines():
+        if ref == update.ref or not is_allowed_branch_ref(policy, ref):
+            continue
+        sha = rev_parse(repo, ref)
+        if is_ancestor(repo, sha, update.new) and not is_ancestor(repo, sha, update.old):
+            heads.append((ref, sha))
+    return [ref for ref, _ in maximal_branch_heads(repo, heads)]
+
+
+def maximal_branch_heads(repo: Path, heads: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    maximal = []
+    for ref, sha in heads:
+        if any(sha != other_sha and is_ancestor(repo, sha, other_sha) for _, other_sha in heads):
+            continue
+        maximal.append((ref, sha))
+    return maximal
+
+
+def merge_rule_allows_source(policy: dict[str, Any], source_ref: str, target_ref: str) -> bool:
+    for rule in policy.get("merge_rules", []):
+        if rule.get("target_ref") == target_ref and re.match(rule["source_ref_regex"], source_ref):
+            return True
+    return False
 
 
 def validate_protected_target_update(
@@ -608,6 +793,19 @@ def read_updates(stdin: Any) -> list[RefUpdate]:
     return updates
 
 
+def read_push_updates(stdin: Any) -> list[PushUpdate]:
+    updates: list[PushUpdate] = []
+    for raw_line in stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(" ")
+        if len(parts) != 4:
+            raise HookReject("HOOK_PRE_PUSH_INPUT_INVALID", line=line)
+        updates.append(PushUpdate(local_ref=parts[0], local_sha=parts[1], remote_ref=parts[2], remote_sha=parts[3]))
+    return updates
+
+
 def append_log(path: Path, phase: str, updates: list[RefUpdate]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
@@ -651,6 +849,10 @@ def rev_parse(repo: Path, ref: str) -> str:
     return git(repo, "rev-parse", "--verify", ref).stdout.strip()
 
 
+def peeled_rev_parse(repo: Path, ref: str) -> str:
+    return git(repo, "rev-parse", "--verify", f"{ref}^{{}}").stdout.strip()
+
+
 def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
     if ancestor == ZERO or descendant == ZERO:
         return False
@@ -668,8 +870,16 @@ def is_policy_ref(ref: str) -> bool:
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    result = git_with_env(repo, os.environ.copy(), *args, check=False)
+    if check and result.returncode != 0:
+        raise HookReject("GIT_COMMAND_FAILED", command="git " + " ".join(args), stderr=result.stderr.strip())
+    return result
+
+
+def git_with_env(repo: Path, env: dict[str, str], *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

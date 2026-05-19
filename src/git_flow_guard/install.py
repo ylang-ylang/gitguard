@@ -126,6 +126,10 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
     hook_path.write_text(reference_transaction_hook(), encoding="utf-8")
     hook_path.chmod(0o755)
 
+    pre_push_path = hook_dir / "pre-push"
+    pre_push_path.write_text(pre_push_hook(), encoding="utf-8")
+    pre_push_path.chmod(0o755)
+
     enable_path = install_dir / "enable.sh"
     enable_path.write_text(enable_script(), encoding="utf-8")
     enable_path.chmod(0o755)
@@ -157,6 +161,27 @@ def reference_transaction_hook() -> str:
             'export GFG_STATE_JSON="$resolved_git_dir/git-flow-guard-state.json"',
             'export GFG_LOG_PATH="$resolved_git_dir/git-flow-guard-hook.log"',
             'exec python3 "$repo_root/.git-flow-guard/runtime/policy_reference_transaction_hook.py" "$@"',
+            "",
+        ]
+    )
+
+
+def pre_push_hook() -> str:
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -eu",
+            'repo_root="$(git rev-parse --show-toplevel)"',
+            'git_dir="$(git rev-parse --git-dir)"',
+            'case "$git_dir" in',
+            '  /*) resolved_git_dir="$git_dir" ;;',
+            '  *) resolved_git_dir="$repo_root/$git_dir" ;;',
+            "esac",
+            'export GFG_REPO_PATH="$repo_root"',
+            'export GFG_POLICY_JSON="$repo_root/.git-flow-guard/policy.json"',
+            'export GFG_STATE_JSON="$resolved_git_dir/git-flow-guard-state.json"',
+            'export GFG_LOG_PATH="$resolved_git_dir/git-flow-guard-hook.log"',
+            'exec python3 "$repo_root/.git-flow-guard/runtime/policy_reference_transaction_hook.py" pre-push "$@"',
             "",
         ]
     )

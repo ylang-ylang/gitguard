@@ -120,6 +120,7 @@ It copies the packaged runtime hook into the target repo:
 ```text
 <repo>/.git-flow-guard/contribution.md
 <repo>/.git-flow-guard/enable.sh
+<repo>/.git-flow-guard/hooks/pre-push
 <repo>/.git-flow-guard/hooks/reference-transaction
 <repo>/.git-flow-guard/policy.json
 <repo>/.git-flow-guard/runtime/policy_reference_transaction_hook.py
@@ -148,6 +149,10 @@ git-flow-guard: agent guidance: if you are an agent, read the contribution docum
 ```
 
 For `merge ... tag:"..."` rules, Git Flow Guard treats the branch merge and tag creation as separate Git ref transactions. The merge may complete first, then the hook records a pending tag requirement. Until the matching tag is created, the same tagged merge rule is blocked with `PENDING_TAG_REQUIRED`, and the already-merged source ref is locked with `PENDING_TAG_SOURCE_MOVED`. Other allowed merge rules, such as `dev to main`, are not blocked by that pending release tag.
+
+Policy-managed branches cannot be moved to include another managed branch head unless the Mermaid graph declares that merge direction. This is independent of merge strategy: normal allowed merges may be fast-forward or `--no-ff`. For example, if the graph has `dev to main` but no `main to dev`, `git branch -f dev main` is rejected even when the underlying ref move is a fast-forward.
+
+Before any push, the installed `pre-push` hook checks local tags that satisfy the configured release tag rules. If a matching local release tag is missing from the target remote, the hook prints a visible `auto-pushing missing release tags` message and pushes that tag first. If the remote already has the same tag name pointing at a different object, the push is rejected with `PUSH_TAG_CONFLICT`.
 
 Runtime state is stored in the target repo's Git directory:
 

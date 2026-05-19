@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import shutil
 from typing import Any
 
-from configs.test_base import PolicyHookTestBase
+from configs.test_base import PolicyHookTestBase, run_raw
 
 
 START_SYMBOL = "=========== GIT FLOW GUARD REJECTION TESTS START ==========="
@@ -42,6 +43,8 @@ class DevMainReleaseHookTest(PolicyHookTestBase):
         self.git("commit", "-m", START_SYMBOL)
 
     def run_rejection_tests(self) -> None:
+        self.expect_dev_force_move_to_main_rejected()
+
         self.create_pending_release_flow()
         self.assert_pending_tag_count(1)
 
@@ -64,6 +67,7 @@ class DevMainReleaseHookTest(PolicyHookTestBase):
         self.merge_to("release/1.2", "main")
         self.tag("V1.2", self.blocked_release_sha)
         self.assert_pending_tag_count(0)
+        self.assert_pre_push_auto_syncs_release_tags()
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
@@ -76,6 +80,10 @@ class DevMainReleaseHookTest(PolicyHookTestBase):
         self.tag("V1.0", self.release_sha)
         self.assert_is_ancestor(self.release_sha, "main")
         self.assert_pending_tag_count(0)
+
+    def expect_dev_force_move_to_main_rejected(self) -> None:
+        self.merge_to("dev", "main")
+        self.expect_rejected(["branch", "-f", "dev", "main"], "MANAGED_BRANCH_SOURCE_NOT_ALLOWED")
 
     def create_pending_release_flow(self) -> None:
         branch = "release/1.1"
@@ -112,6 +120,28 @@ class DevMainReleaseHookTest(PolicyHookTestBase):
         pending_tags = self.state().get("pending_tags", {})
         if len(pending_tags) != expected:
             raise AssertionError(f"{self.name}: expected {expected} pending tags, got {json.dumps(pending_tags, indent=2, sort_keys=True)}")
+
+    def assert_pre_push_auto_syncs_release_tags(self) -> None:
+        remote = self.work_root.parent / f"{self.name}-remote.git"
+        if remote.exists():
+            shutil.rmtree(remote)
+        run_raw(self.work_root.parent, ["git", "init", "--bare", str(remote)])
+        self.git("remote", "add", "origin", str(remote))
+
+        result = self.git("push", "origin", "main")
+        combined = result.stdout + result.stderr
+        if "auto-pushing missing release tags" not in combined:
+            raise AssertionError(f"{self.name}: pre-push did not announce missing release tag sync\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        for tag in ["V1.0", "V1.1", "V1.2"]:
+            if f"auto-pushed release tag tag=refs/tags/{tag}" not in combined:
+                raise AssertionError(f"{self.name}: pre-push did not announce synced tag {tag}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+
+        remote_tags = self.git("ls-remote", "--tags", "origin").stdout
+        for tag in ["V1.0", "V1.1", "V1.2"]:
+            expected = self.rev_parse(tag)
+            expected_line = f"{expected}\trefs/tags/{tag}"
+            if expected_line not in remote_tags:
+                raise AssertionError(f"{self.name}: remote is missing synced tag {tag}\nexpected: {expected_line}\nremote tags:\n{remote_tags}")
 
 
 TEST_CASE = DevMainReleaseHookTest
