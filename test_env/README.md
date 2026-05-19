@@ -49,7 +49,7 @@ git-flow-guard: agent guidance: if you are an agent, read the contribution docum
 
 The rejection reason itself uses a stable `CODE key=value` format so tests and agents can match exact failure classes without parsing friendly prose.
 
-The `dev-release` integration test also verifies that the generated `pre-push` hook auto-pushes local release tags that satisfy policy but are missing from the target remote, while printing a visible sync message.
+The `dev-release_slack` integration test also verifies that the generated `pre-push` hook auto-pushes local release tags that satisfy policy but are missing from the target remote, while printing a visible sync message.
 
 Each config gets a separate test directory:
 
@@ -62,7 +62,7 @@ For example:
 ```text
 .tmp/dev-feat-release-hotfix
 .tmp/dev-infra-feat-release-hotfix
-.tmp/dev-release
+.tmp/dev-release_slack
 ```
 
 Each config test repo is built by a config-specific test class that inherits from the shared policy hook test base:
