@@ -43,6 +43,8 @@ class DevMainReleaseHookTest(PolicyHookTestBase):
         self.git("commit", "-m", START_SYMBOL)
 
     def run_rejection_tests(self) -> None:
+        self.expect_dev_force_move_to_main_rejected()
+
         self.create_pending_release_flow()
         self.assert_pending_tag_count(1)
 
@@ -78,6 +80,10 @@ class DevMainReleaseHookTest(PolicyHookTestBase):
         self.tag("V1.0", self.release_sha)
         self.assert_is_ancestor(self.release_sha, "main")
         self.assert_pending_tag_count(0)
+
+    def expect_dev_force_move_to_main_rejected(self) -> None:
+        self.merge_to("dev", "main")
+        self.expect_rejected(["branch", "-f", "dev", "main"], "MANAGED_BRANCH_SOURCE_NOT_ALLOWED")
 
     def create_pending_release_flow(self) -> None:
         branch = "release/1.1"
