@@ -13,5 +13,5 @@ Current configs:
 
 - `dev-feat-release-hotfix`: `main`, `dev`, `feat/*`, `release/*`, `hotfix/*`.
 - `dev-infra-feat-release-hotfix`: `main`, `dev`, `infra/*`, `feat/*`, `release/*`, `hotfix/*`.
-- `dev-only`: `main`, `dev`, and `release/*`; `dev` allows direct commits, `main` only accepts tagged release merges.
-- `dev-release`: `main`, `dev`, and `release/*`; `dev` may merge to `main`, while release merges require tags.
+- `dev-release`: `main`, `dev`, and `release/*`; `dev` allows direct commits, `main` only accepts tagged release merges.
+- `dev-release_slack`: `main`, `dev`, and `release/*`; `dev` may merge to `main`, while release merges require tags.
