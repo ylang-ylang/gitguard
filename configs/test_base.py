@@ -14,6 +14,7 @@ from git_flow_guard.mermaid import load_policy_from_markdown
 
 FINISH_SYMBOL = "========test finished========"
 UNEXPECTED_ACCEPTANCE_SYMBOL = "!!!!!!!! GIT FLOW GUARD EXPECTED REJECTION WAS ACCEPTED !!!!!!!!"
+EXPECTED_AGENT_HINT = "if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook."
 
 
 @dataclass
@@ -124,6 +125,11 @@ class PolicyHookTestBase:
         if expected_policy_hint not in combined:
             raise AssertionError(
                 f"{self.name}: expected rejection to include policy hint {expected_policy_hint!r} "
+                f"for git {' '.join(args)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if EXPECTED_AGENT_HINT not in combined:
+            raise AssertionError(
+                f"{self.name}: expected rejection to include agent guidance {EXPECTED_AGENT_HINT!r} "
                 f"for git {' '.join(args)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
 

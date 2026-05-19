@@ -44,6 +44,7 @@ Hook rejection messages must include a policy hint that points at the generated 
 
 ```text
 git-flow-guard: see policy: <repo>/.git-flow-guard/contribution.md
+git-flow-guard: agent guidance: if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook.
 ```
 
 The rejection reason itself uses a stable `CODE key=value` format so tests and agents can match exact failure classes without parsing friendly prose.
