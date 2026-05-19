@@ -12,6 +12,10 @@ from typing import Any
 
 
 ZERO = "0" * 40
+AGENT_REJECT_HINT = (
+    "if you are an agent, read the contribution document and use the configured workflow; "
+    "do not try to bypass this hook."
+)
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,7 @@ def main() -> int:
         source_path = policy.get("source", {}).get("path")
         if source_path:
             print(f"git-flow-guard: see policy: {source_path}", file=sys.stderr)
+        print(f"git-flow-guard: agent guidance: {AGENT_REJECT_HINT}", file=sys.stderr)
         return 1
 
     return 0

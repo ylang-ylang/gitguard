@@ -144,6 +144,7 @@ Rejection reasons use a stable `CODE key=value` format, for example:
 ```text
 git-flow-guard: TAG_REQUIRED_TARGETS_MISSING tag=refs/tags/v1.2.0 target=abc123 missing=refs/heads/main
 git-flow-guard: see policy: <repo>/.git-flow-guard/contribution.md
+git-flow-guard: agent guidance: if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook.
 ```
 
 For `merge ... tag:"..."` rules, Git Flow Guard treats the branch merge and tag creation as separate Git ref transactions. The merge may complete first, then the hook records a pending tag requirement. Until the matching tag is created, the same tagged merge rule is blocked with `PENDING_TAG_REQUIRED`, and the already-merged source ref is locked with `PENDING_TAG_SOURCE_MOVED`. Other allowed merge rules, such as `dev to main`, are not blocked by that pending release tag.
