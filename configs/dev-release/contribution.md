@@ -1,4 +1,4 @@
-# Direct Dev Release Flow
+# Dev Release Flow
 
 ```mermaid
 gitGraph TB:
@@ -6,11 +6,9 @@ gitGraph TB:
     branch dev
     checkout dev
     commit id:"dev baseline"
-    checkout main
-    merge dev id:"dev to main"
+    commit id:"direct dev work"
 
     %% Release from dev to main
-    checkout dev
     branch "release/*"
     checkout "release/*"
     commit id:"release hardening"
@@ -20,7 +18,9 @@ gitGraph TB:
 
 ## Rules
 
-- `dev` may merge directly to `main`.
+- `dev` is the only development branch and may receive direct commits.
 - `release/*` branches from `dev`.
-- `release/*` releases must merge to `main` with a `V#.#` tag.
-- A missing release tag blocks later `release/* to main` merges, but does not block allowed `dev to main` merges.
+- `release/*` is the only branch family allowed to merge into `main`.
+- `release/*` releases must use a `V#.#` tag, where `#` means one or more decimal digits.
+- `main` must not receive direct commits.
+- Ad hoc tags on `main` are not allowed; release tags are allowed only when they satisfy the `release/* to main` rule.
