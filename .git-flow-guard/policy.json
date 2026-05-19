@@ -1,0 +1,99 @@
+{
+  "branch_from": [
+    {
+      "source": "main",
+      "source_ref": "refs/heads/main",
+      "target": "dev",
+      "target_ref": "refs/heads/dev",
+      "target_ref_regex": "^refs/heads/dev$"
+    },
+    {
+      "source": "dev",
+      "source_ref": "refs/heads/dev",
+      "target": "release/*",
+      "target_ref": "refs/heads/release/*",
+      "target_ref_regex": "^refs/heads/release/.+$"
+    }
+  ],
+  "branches": {
+    "families": [
+      "release/*"
+    ],
+    "long_lived": [
+      "main",
+      "dev"
+    ]
+  },
+  "merge_rules": [
+    {
+      "id": "dev to main",
+      "source": "dev",
+      "source_ref": "refs/heads/dev",
+      "source_ref_regex": "^refs/heads/dev$",
+      "target": "main",
+      "target_ref": "refs/heads/main"
+    },
+    {
+      "id": "release/* to main",
+      "source": "release/*",
+      "source_ref": "refs/heads/release/*",
+      "source_ref_regex": "^refs/heads/release/.+$",
+      "tag_pattern": "V#.#",
+      "tag_ref": "refs/tags/V#.#",
+      "tag_ref_regex": "^refs/tags/V[0-9]+\\.[0-9]+$",
+      "tag_tokens": [
+        "#",
+        "#"
+      ],
+      "target": "main",
+      "target_ref": "refs/heads/main"
+    }
+  ],
+  "protected_refs": [
+    "refs/heads/main"
+  ],
+  "required_targets": [
+    {
+      "source": "dev",
+      "source_ref": "refs/heads/dev",
+      "source_ref_regex": "^refs/heads/dev$",
+      "target_refs": [
+        "refs/heads/main"
+      ],
+      "targets": [
+        "main"
+      ]
+    },
+    {
+      "source": "release/*",
+      "source_ref": "refs/heads/release/*",
+      "source_ref_regex": "^refs/heads/release/.+$",
+      "target_refs": [
+        "refs/heads/main"
+      ],
+      "targets": [
+        "main"
+      ]
+    }
+  ],
+  "source": {
+    "file": "contribution.md",
+    "format": "mermaid.gitGraph",
+    "original_path": "/home/ylang/python_module/git-flow-guard/configs/dev-release/contribution.md",
+    "path": "/home/ylang/python_module/git-flow-guard/.git-flow-guard/contribution.md"
+  },
+  "tag_rules": [
+    {
+      "source": "release/*",
+      "tag_pattern": "V#.#",
+      "tag_ref": "refs/tags/V#.#",
+      "tag_ref_regex": "^refs/tags/V[0-9]+\\.[0-9]+$",
+      "tag_tokens": [
+        "#",
+        "#"
+      ],
+      "target": "main"
+    }
+  ],
+  "version": 1
+}
