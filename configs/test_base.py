@@ -81,6 +81,7 @@ class PolicyHookTestBase:
             self.repo / ".git-flow-guard" / "policy.json",
             self.repo / ".git-flow-guard" / "enable.sh",
             self.repo / ".git-flow-guard" / "hooks" / "reference-transaction",
+            self.repo / ".git-flow-guard" / "hooks" / "pre-push",
             self.repo / ".git-flow-guard" / "runtime" / "policy_reference_transaction_hook.py",
         ]
         for path in expected_files:

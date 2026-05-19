@@ -49,6 +49,8 @@ git-flow-guard: agent guidance: if you are an agent, read the contribution docum
 
 The rejection reason itself uses a stable `CODE key=value` format so tests and agents can match exact failure classes without parsing friendly prose.
 
+The `dev-release` integration test also verifies that the generated `pre-push` hook auto-pushes local release tags that satisfy policy but are missing from the target remote, while printing a visible sync message.
+
 Each config gets a separate test directory:
 
 ```text
