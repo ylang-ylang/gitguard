@@ -39,6 +39,7 @@ class DevOnlyHookTest(PolicyHookTestBase):
         self.start_marker_sha = self.commit_file("dev", "TEST_START.txt", START_SYMBOL + "\n", START_SYMBOL)
         self.merge_to("dev", "main", message=START_SYMBOL)
         self.marker_dev_sha = self.rev_parse("dev")
+        self.marker_main_sha = self.rev_parse("main")
 
     def run_rejection_tests(self) -> None:
         self.expect_rejected(["branch", "feat/demo", "dev"], "BRANCH_NAME_NOT_ALLOWED")
@@ -54,10 +55,10 @@ class DevOnlyHookTest(PolicyHookTestBase):
         self.git("commit", "--allow-empty", "-m", "direct dev commit")
         self.direct_dev_sha = self.rev_parse("dev")
 
-        self.expect_rejected(["tag", "v1.1", self.marker_dev_sha], "TAG_SOURCE_TAG_PATTERN_MISMATCH")
-        self.expect_rejected(["tag", "V1.1.0", self.marker_dev_sha], "TAG_SOURCE_TAG_PATTERN_MISMATCH")
-        self.expect_rejected(["tag", "V2.0", "main"], "TAG_TARGET_NOT_SOURCE_HISTORY")
-        self.expect_rejected(["tag", "V1.1", self.direct_dev_sha], "TAG_REQUIRED_TARGETS_MISSING")
+        self.expect_rejected(["tag", "v1.1", self.marker_main_sha], "TAG_TARGET_TAG_PATTERN_MISMATCH")
+        self.expect_rejected(["tag", "V1.1.0", self.marker_main_sha], "TAG_TARGET_TAG_PATTERN_MISMATCH")
+        self.expect_rejected(["tag", "V2.0", "dev"], "TAG_TARGET_NOT_TARGET_HISTORY")
+        self.expect_rejected(["tag", "V1.1", self.direct_dev_sha], "TAG_TARGET_NOT_TARGET_HISTORY")
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
@@ -82,6 +83,7 @@ class DevOnlyHookTest(PolicyHookTestBase):
         )
         self.merge_to("dev", "main")
         self.assert_is_ancestor(self.tagged_release_sha, "main")
+        self.tagged_target_sha = self.rev_parse("main")
         self.assert_pending_tag_count(0)
 
         self.dev_after_release_sha = self.commit_file(
@@ -90,7 +92,7 @@ class DevOnlyHookTest(PolicyHookTestBase):
             "dev after release\n",
             "dev after release",
         )
-        self.tag("V1.0", self.tagged_release_sha)
+        self.tag("V1.0", self.tagged_target_sha)
         self.assert_pending_tag_count(0)
 
     def state(self) -> dict[str, Any]:

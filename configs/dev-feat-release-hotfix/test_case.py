@@ -33,7 +33,6 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
     def create_rejection_test_fixtures(self) -> None:
         self.create_feat_reject_to_main_fixture()
         self.create_release_reject_main_before_dev_fixture()
-        self.create_hotfix_wrong_line_fixture()
         self.create_old_release_fixture()
 
     def mark_rejection_tests_start(self) -> None:
@@ -54,16 +53,13 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
             cleanup=self.cleanup_merge_state,
         )
 
-        self.expect_rejected(["tag", "release-1.0.0", "main"], "TAG_NAME_NOT_ALLOWED")
+        self.expect_rejected(["tag", "release-1.0.0", "main"], "TAG_TARGET_TAG_PATTERN_MISMATCH")
         self.expect_rejected(
-            ["tag", "v1.1.2", self.release_sha],
-            "TAG_SOURCE_TAG_PATTERN_MISMATCH",
+            ["tag", "v1.1.2", self.release_main_sha],
+            "TAG_TARGET_NOT_TARGET_HEAD",
         )
-        self.expect_rejected(
-            ["tag", "v1.2.2", self.hotfix_wrong_line_sha],
-            "TAG_VERSION_LINE_MISMATCH",
-        )
-        self.expect_rejected(["tag", "v0.9.0", self.old_release_sha], "TAG_VERSION_NOT_INCREMENTAL")
+        self.expect_rejected(["tag", "v0.9.0", self.old_release_main_sha], "TAG_VERSION_NOT_INCREMENTAL")
+        self.assert_hotfix_wrong_line_rejected()
 
         self.git("checkout", "main")
         self.expect_rejected(
@@ -88,7 +84,8 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
         self.release_sha = self.commit_file(branch, "release-1.1.txt", "release 1.1\n", "release 1.1")
         self.merge_to(branch, "dev")
         self.merge_to(branch, "main")
-        self.tag("v1.1.0", self.release_sha)
+        self.release_main_sha = self.rev_parse("main")
+        self.tag("v1.1.0", self.release_main_sha)
         self.assert_is_ancestor(self.release_sha, "dev")
         self.assert_is_ancestor(self.release_sha, "main")
 
@@ -98,7 +95,8 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
         self.hotfix_sha = self.commit_file(branch, "hotfix-1.1.1.txt", "hotfix 1.1.1\n", "hotfix 1.1.1")
         self.merge_to(branch, "dev")
         self.merge_to(branch, "main")
-        self.tag("v1.1.1", self.hotfix_sha)
+        self.hotfix_main_sha = self.rev_parse("main")
+        self.tag("v1.1.1", self.hotfix_main_sha)
         self.assert_is_ancestor(self.hotfix_sha, "dev")
         self.assert_is_ancestor(self.hotfix_sha, "main")
 
@@ -123,10 +121,11 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
         self.old_release_sha = self.commit_file(branch, "release-0.9.txt", "release 0.9\n", "fixture release 0.9")
         self.merge_to(branch, "dev")
         self.merge_to(branch, "main")
-        self.tag("v1.2.0", self.old_release_sha)
+        self.old_release_main_sha = self.rev_parse("main")
+        self.tag("v1.2.0", self.old_release_main_sha)
 
-    def create_hotfix_wrong_line_fixture(self) -> None:
-        branch = "hotfix/wrong-line"
+    def assert_hotfix_wrong_line_rejected(self) -> None:
+        branch = "hotfix/wrong-line-reject"
         self.create_branch(branch, "main")
         self.hotfix_wrong_line_sha = self.commit_file(
             branch,
@@ -136,6 +135,9 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
         )
         self.merge_to(branch, "dev")
         self.merge_to(branch, "main")
+        self.hotfix_wrong_line_main_sha = self.rev_parse("main")
+        self.expect_rejected(["tag", "v1.3.2", self.hotfix_wrong_line_main_sha], "TAG_VERSION_LINE_MISMATCH")
+        self.tag("v1.2.1", self.hotfix_wrong_line_main_sha)
 
 
 TEST_CASE = BasicFeatureReleaseHookTest

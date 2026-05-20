@@ -57,18 +57,20 @@ class DevFeatHookTest(PolicyHookTestBase):
             ["commit", "--allow-empty", "-m", "direct main commit"],
             "PROTECTED_REF_NO_ALLOWED_SOURCE",
         )
-        self.expect_rejected(["tag", "V2.0", "main"], "TAG_TARGET_NOT_SOURCE_HEAD")
+        self.expect_rejected(["tag", "V2.0", "dev"], "TAG_TARGET_NOT_TARGET_HEAD")
 
-        self.expect_rejected(["tag", "v1.1", self.marker_dev_sha], "TAG_SOURCE_TAG_PATTERN_MISMATCH")
-        self.expect_rejected(["tag", "V1.1.0", self.marker_dev_sha], "TAG_SOURCE_TAG_PATTERN_MISMATCH")
-        self.expect_rejected(["tag", "V1.1", self.unmerged_feature_sha], "TAG_REQUIRED_TARGETS_MISSING")
+        self.expect_rejected(["tag", "v1.1", "main"], "TAG_TARGET_TAG_PATTERN_MISMATCH")
+        self.expect_rejected(["tag", "V1.1.0", "main"], "TAG_TARGET_TAG_PATTERN_MISMATCH")
+        self.expect_rejected(["tag", "V1.1", self.unmerged_feature_sha], "TAG_TARGET_NOT_TARGET_HEAD")
 
         self.create_pending_dev_release()
         self.assert_pending_tag_count(1)
-        self.expect_rejected(["tag", "V0.9", self.marker_dev_sha], "TAG_VERSION_NOT_INCREMENTAL")
-        self.expect_pending_dev_source_move_rejected()
+        self.expect_rejected(["tag", "V0.9", self.pending_main_sha], "TAG_VERSION_NOT_INCREMENTAL")
+        self.assert_pending_dev_source_move_allowed()
         self.assert_pending_tag_count(1)
-        self.tag("V1.1", self.marker_dev_sha)
+        self.expect_pending_main_target_move_rejected()
+        self.assert_pending_tag_count(1)
+        self.tag("V1.1", self.pending_main_sha)
         self.assert_pending_tag_count(0)
         self.assert_pre_push_auto_syncs_release_tags()
         self.assert_pre_push_auto_sync_can_be_disabled()
@@ -83,7 +85,8 @@ class DevFeatHookTest(PolicyHookTestBase):
         self.merge_to(branch, "dev")
         self.dev_release_sha = self.rev_parse("dev")
         self.merge_to("dev", "main")
-        self.tag("V1.0", self.dev_release_sha)
+        self.main_release_sha = self.rev_parse("main")
+        self.tag("V1.0", self.main_release_sha)
         self.assert_is_ancestor(self.feature_sha, "dev")
         self.assert_is_ancestor(self.dev_release_sha, "main")
         self.assert_pending_tag_count(0)
@@ -100,9 +103,10 @@ class DevFeatHookTest(PolicyHookTestBase):
 
     def create_pending_dev_release(self) -> None:
         self.merge_to("dev", "main")
+        self.pending_main_sha = self.rev_parse("main")
         self.assert_is_ancestor(self.marker_dev_sha, "main")
 
-    def expect_pending_dev_source_move_rejected(self) -> None:
+    def assert_pending_dev_source_move_allowed(self) -> None:
         branch = "feat/pending-move"
         self.create_branch(branch, "dev")
         self.pending_move_sha = self.commit_file(
@@ -112,9 +116,13 @@ class DevFeatHookTest(PolicyHookTestBase):
             "pending dev move",
         )
         self.git("checkout", "dev")
+        self.git("merge", "--no-ff", "--no-edit", branch)
+
+    def expect_pending_main_target_move_rejected(self) -> None:
+        self.git("checkout", "main")
         self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", branch],
-            "PENDING_TAG_SOURCE_MOVED",
+            ["merge", "--no-ff", "--no-edit", "dev"],
+            "PENDING_TAG_TARGET_MOVED",
             cleanup=self.cleanup_merge_state,
         )
 
