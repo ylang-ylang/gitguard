@@ -76,20 +76,24 @@ class DevMainReleaseHookTest(PolicyHookTestBase):
         branch = "release/1.0"
         self.create_branch(branch, "dev")
         self.release_sha = self.commit_file(branch, "release-1.0.txt", "release 1.0\n", "release 1.0")
+        self.merge_to(branch, "dev")
         self.merge_to(branch, "main")
         self.tag("V1.0", self.release_sha)
+        self.assert_is_ancestor(self.release_sha, "dev")
         self.assert_is_ancestor(self.release_sha, "main")
         self.assert_pending_tag_count(0)
 
     def expect_dev_force_move_to_main_rejected(self) -> None:
         self.merge_to("dev", "main")
-        self.expect_rejected(["branch", "-f", "dev", "main"], "MANAGED_BRANCH_SOURCE_NOT_ALLOWED")
+        self.expect_rejected(["branch", "-f", "dev", "main"], "PROTECTED_REF_NO_ALLOWED_SOURCE")
 
     def create_pending_release_flow(self) -> None:
         branch = "release/1.1"
         self.create_branch(branch, "dev")
         self.pending_release_sha = self.commit_file(branch, "release-1.1.txt", "release 1.1\n", "release 1.1")
+        self.merge_to(branch, "dev")
         self.merge_to(branch, "main")
+        self.assert_is_ancestor(self.pending_release_sha, "dev")
         self.assert_is_ancestor(self.pending_release_sha, "main")
 
     def create_allowed_dev_merge_while_release_tag_pending(self) -> None:
@@ -111,6 +115,7 @@ class DevMainReleaseHookTest(PolicyHookTestBase):
         branch = "release/1.2"
         self.create_branch(branch, "dev")
         self.blocked_release_sha = self.commit_file(branch, "release-1.2.txt", "release 1.2\n", "release 1.2")
+        self.merge_to(branch, "dev")
         self.git("checkout", "main")
 
     def state(self) -> dict[str, Any]:

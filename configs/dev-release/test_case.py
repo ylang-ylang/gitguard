@@ -47,7 +47,7 @@ class DevOnlyHookTest(PolicyHookTestBase):
             ["commit", "--allow-empty", "-m", "direct main commit"],
             "PROTECTED_REF_NO_ALLOWED_SOURCE",
         )
-        self.expect_rejected(["tag", "V2.0", "main"], "TAG_TARGET_NOT_SOURCE_HEAD")
+        self.expect_rejected(["tag", "V2.0", "main"], "TAG_REQUIRED_TARGETS_MISSING")
 
         self.expect_rejected(["tag", "v1.2", self.release_sha], "TAG_SOURCE_TAG_PATTERN_MISMATCH")
         self.expect_rejected(["tag", "V1.2.0", self.release_sha], "TAG_SOURCE_TAG_PATTERN_MISMATCH")
@@ -72,8 +72,10 @@ class DevOnlyHookTest(PolicyHookTestBase):
         branch = "release/1.1"
         self.create_branch(branch, "dev")
         self.release_sha = self.commit_file(branch, "release-1.1.txt", "release 1.1\n", "release 1.1")
+        self.merge_to(branch, "dev")
         self.merge_to(branch, "main")
         self.tag("V1.1", self.release_sha)
+        self.assert_is_ancestor(self.release_sha, "dev")
         self.assert_is_ancestor(self.release_sha, "main")
 
     def create_unmerged_release_fixture(self) -> None:

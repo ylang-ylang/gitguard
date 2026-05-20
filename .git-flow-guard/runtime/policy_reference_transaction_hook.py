@@ -356,6 +356,9 @@ def validate_protected_target_update(
     if not is_ancestor(repo, update.old, update.new):
         raise HookReject("PROTECTED_REF_NON_FAST_FORWARD", ref=update.ref, old=short_sha(update.old), new=short_sha(update.new))
 
+    if direct_commit_allowed(repo, policy, update):
+        return
+
     candidates = source_candidates_for_target(repo, policy, update)
     if not candidates:
         raise HookReject("PROTECTED_REF_NO_ALLOWED_SOURCE", ref=update.ref, old=short_sha(update.old), new=short_sha(update.new))
@@ -385,6 +388,13 @@ def validate_protected_target_update(
             source_sha=short_sha(candidate.sha),
             expected_ref=next_required,
         )
+
+
+def direct_commit_allowed(repo: Path, policy: dict[str, Any], update: RefUpdate) -> bool:
+    for item in policy.get("direct_commit_refs", []):
+        if re.match(item["ref_regex"], update.ref):
+            return not introduced_policy_branch_heads(repo, policy, update)
+    return False
 
 
 def source_candidates_for_target(repo: Path, policy: dict[str, Any], update: RefUpdate) -> list[SourceCandidate]:
