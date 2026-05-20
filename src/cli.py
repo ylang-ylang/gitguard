@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import sys
 
-from git_flow_guard import __version__
-from git_flow_guard import install as install_module
+import install as install_module
+
+
+__version__ = "0.1.0"
 
 
 def main() -> int:
