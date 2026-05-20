@@ -1,4 +1,4 @@
-# Dev Feat Flow
+# Dev Release Flow
 
 ```mermaid
 gitGraph TB:
@@ -23,4 +23,4 @@ gitGraph TB:
 - `main` may only receive tagged merges from `dev`.
 - `dev` releases must use a `V#.#` tag, where `#` means one or more decimal digits.
 - `main` must not receive direct commits.
-- Ad hoc tags are not allowed; release tags are allowed only when they satisfy the `dev to main` rule.
+- Ad hoc tags are not allowed; release tags are allowed only when they satisfy the `dev` to `main` rule.
