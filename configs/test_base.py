@@ -89,6 +89,14 @@ class PolicyHookTestBase:
                 raise AssertionError(f"{self.name}: installed file is missing: {path}")
         if (self.repo / ".git-flow-guard" / "policy.yaml").exists():
             raise AssertionError(f"{self.name}: policy.yaml should not be installed")
+        policy = json.loads((self.repo / ".git-flow-guard" / "policy.json").read_text(encoding="utf-8"))
+        source = policy.get("source", {})
+        if source.get("path") != ".git-flow-guard/contribution.md":
+            raise AssertionError(f"{self.name}: policy source path should be repo-relative, got {source.get('path')!r}")
+        if Path(source["path"]).is_absolute():
+            raise AssertionError(f"{self.name}: policy source path should not be absolute: {source['path']}")
+        if "original_path" in source:
+            raise AssertionError(f"{self.name}: policy source should not include original_path: {source['original_path']}")
         self.git_no_hooks("config", "--worktree", "--unset", "core.hooksPath", check=False)
         result = self.run_command([".git-flow-guard/enable.sh"], check=True)
         if "core.hooksPath=.git-flow-guard/hooks" not in result.stdout:

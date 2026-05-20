@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import importlib.resources
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -107,8 +106,9 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
 
     installed_contribution_path = install_dir / "contribution.md"
     shutil.copyfile(contribution_path, installed_contribution_path)
-    policy.setdefault("source", {})["path"] = display_policy_path(installed_contribution_path)
-    policy["source"]["original_path"] = display_policy_path(contribution_path)
+    policy_source = policy.setdefault("source", {})
+    policy_source["path"] = installed_contribution_path.relative_to(repo).as_posix()
+    policy_source.pop("original_path", None)
 
     runtime_runner = runtime_dir / "policy_reference_transaction_hook.py"
     if runner_path:
@@ -238,19 +238,6 @@ def resolve_config(config: str | Path) -> Path:
             return contribution
 
     raise InstallError(f"cannot resolve config: {config}")
-
-
-def display_policy_path(path: Path) -> str:
-    display_root = os.environ.get("GFG_POLICY_DISPLAY_ROOT")
-    if not display_root:
-        return str(path)
-
-    source_root = Path(os.environ.get("GFG_POLICY_SOURCE_ROOT", str(PROJECT_ROOT))).resolve()
-    try:
-        relative = path.resolve().relative_to(source_root)
-    except ValueError:
-        return str(path)
-    return str(Path(display_root) / relative)
 
 
 def load_runtime_hook_text() -> str:
