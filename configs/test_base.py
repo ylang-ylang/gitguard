@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, ClassVar
 
-from git_flow_guard.install import install as install_policy_hook
-from git_flow_guard.mermaid import load_policy_from_markdown
+from install import install as install_policy_hook
+from mermaid import load_policy_from_markdown
 
 
 FINISH_SYMBOL = "========test finished========"
-UNEXPECTED_ACCEPTANCE_SYMBOL = "!!!!!!!! GIT FLOW GUARD EXPECTED REJECTION WAS ACCEPTED !!!!!!!!"
+UNEXPECTED_ACCEPTANCE_SYMBOL = "!!!!!!!! GIT GUARD EXPECTED REJECTION WAS ACCEPTED !!!!!!!!"
 EXPECTED_AGENT_HINT = "if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook."
 
 
@@ -52,6 +52,7 @@ class PolicyHookTestBase:
         self.mark_rejection_tests_start()
         self.run_rejection_tests()
         self.checkout_final_branch()
+        self.assert_linked_worktree_branch_creation_guard()
 
         print(f"PASS {self.name}: policy hook test repo is {self.repo}")
         print(f"{self.name}: {FINISH_SYMBOL}")
@@ -77,33 +78,43 @@ class PolicyHookTestBase:
     def install_hook(self) -> None:
         install_policy_hook(self.repo, self.config_dir, scope="worktree")
         expected_files = [
-            self.repo / ".git-flow-guard" / "contribution.md",
-            self.repo / ".git-flow-guard" / "policy.json",
-            self.repo / ".git-flow-guard" / "enable.sh",
-            self.repo / ".git-flow-guard" / "hooks" / "reference-transaction",
-            self.repo / ".git-flow-guard" / "hooks" / "pre-push",
-            self.repo / ".git-flow-guard" / "runtime" / "policy_reference_transaction_hook.py",
+            self.repo / ".git-guard" / "contribution.md",
+            self.repo / ".git-guard" / "config.json",
+            self.repo / ".git-guard" / "policy.json",
+            self.repo / ".git-guard" / "enable.sh",
+            self.repo / ".git-guard" / "hooks" / "reference-transaction",
+            self.repo / ".git-guard" / "hooks" / "pre-push",
+            self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py",
         ]
         for path in expected_files:
             if not path.exists():
                 raise AssertionError(f"{self.name}: installed file is missing: {path}")
-        if (self.repo / ".git-flow-guard" / "policy.yaml").exists():
+        if (self.repo / ".git-guard" / "policy.yaml").exists():
             raise AssertionError(f"{self.name}: policy.yaml should not be installed")
-        policy = json.loads((self.repo / ".git-flow-guard" / "policy.json").read_text(encoding="utf-8"))
+        policy = json.loads((self.repo / ".git-guard" / "policy.json").read_text(encoding="utf-8"))
         source = policy.get("source", {})
-        if source.get("path") != ".git-flow-guard/contribution.md":
+        if source.get("path") != ".git-guard/contribution.md":
             raise AssertionError(f"{self.name}: policy source path should be repo-relative, got {source.get('path')!r}")
         if Path(source["path"]).is_absolute():
             raise AssertionError(f"{self.name}: policy source path should not be absolute: {source['path']}")
         if "original_path" in source:
             raise AssertionError(f"{self.name}: policy source should not include original_path: {source['original_path']}")
+        config = json.loads((self.repo / ".git-guard" / "config.json").read_text(encoding="utf-8"))
+        if config.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
+            raise AssertionError(f"{self.name}: config should enable linked worktree branch creation guard by default")
+        if config.get("pre_push", {}).get("auto_push_missing_tags") is not True:
+            raise AssertionError(f"{self.name}: config should enable missing tag auto-push by default")
         self.git_no_hooks("config", "--worktree", "--unset", "core.hooksPath", check=False)
-        result = self.run_command([".git-flow-guard/enable.sh"], check=True)
-        if "core.hooksPath=.git-flow-guard/hooks" not in result.stdout:
+        self.git_no_hooks("config", "--local", "--unset", "core.hooksPath", check=False)
+        result = self.run_command([".git-guard/enable.sh"], check=True)
+        if "core.hooksPath=.git-guard/hooks" not in result.stdout:
             raise AssertionError(f"{self.name}: enable.sh did not report hook path\nstdout:\n{result.stdout}")
-        hook_path = self.git_no_hooks("config", "--worktree", "--get", "core.hooksPath").stdout.strip()
-        if hook_path != ".git-flow-guard/hooks":
+        hook_path = self.git_no_hooks("config", "--local", "--get", "core.hooksPath").stdout.strip()
+        if hook_path != ".git-guard/hooks":
             raise AssertionError(f"{self.name}: enable.sh set unexpected hooksPath: {hook_path}")
+        worktree_hook_path = self.git_no_hooks("config", "--worktree", "--get", "core.hooksPath", check=False)
+        if worktree_hook_path.returncode == 0:
+            raise AssertionError(f"{self.name}: enable.sh should not set worktree hooksPath: {worktree_hook_path.stdout.strip()}")
 
     def expect_rejected(
         self,
@@ -172,8 +183,83 @@ class PolicyHookTestBase:
         self.git_no_hooks("merge", "--abort", check=False)
         self.git_no_hooks("reset", "--hard", "HEAD")
 
+    def assert_linked_worktree_branch_creation_guard(self) -> None:
+        main_branch = "forbidden/from-main-worktree"
+        linked_branch = "forbidden/from-linked-worktree"
+
+        self.expect_rejected(["branch", main_branch, "HEAD"], "BRANCH_NAME_NOT_ALLOWED")
+
+        linked_repo = self.work_root.parent / f"{self.name}-linked-worktree"
+        if linked_repo.exists():
+            self.git_no_hooks("worktree", "remove", "--force", str(linked_repo), check=False)
+            shutil.rmtree(linked_repo, ignore_errors=True)
+        self.git_no_hooks("worktree", "prune", check=False)
+        self.git("worktree", "add", "--detach", str(linked_repo), "HEAD")
+        install_policy_hook(linked_repo, self.config_dir, scope="worktree")
+
+        before = self.ref_snapshot()
+        result = git_raw(linked_repo, "branch", linked_branch, "HEAD", check=False)
+        after = self.ref_snapshot()
+        if result.returncode == 0:
+            raise AssertionError(f"{self.name}: linked worktree branch creation was accepted")
+
+        combined = result.stdout + result.stderr
+        if "WORKTREE_BRANCH_CREATION_NOT_ALLOWED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected linked worktree branch creation rejection\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if "create a new worktree directory" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected linked worktree rejection guidance\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        expected_policy_hint = f"see policy: {(linked_repo / '.git-guard' / 'contribution.md').resolve()}"
+        if expected_policy_hint not in combined:
+            raise AssertionError(
+                f"{self.name}: expected linked worktree policy hint {expected_policy_hint!r}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if EXPECTED_AGENT_HINT not in combined:
+            raise AssertionError(
+                f"{self.name}: expected linked worktree rejection to include agent guidance\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if after.refs != before.refs:
+            raise AssertionError(
+                f"{self.name}: rejected linked worktree branch creation changed refs\n"
+                f"before: {json.dumps(before.refs, indent=2, sort_keys=True)}\n"
+                f"after: {json.dumps(after.refs, indent=2, sort_keys=True)}"
+            )
+        if ref_exists(linked_repo, f"refs/heads/{linked_branch}"):
+            raise AssertionError(f"{self.name}: linked worktree branch was created: {linked_branch}")
+
+        disabled_config = {
+            "pre_push": {
+                "auto_push_missing_tags": True,
+            },
+            "worktree": {
+                "reject_branch_creation_in_linked_worktree": False,
+            },
+        }
+        (linked_repo / ".git-guard" / "config.json").write_text(
+            json.dumps(disabled_config, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        disabled_branch = "forbidden/from-linked-worktree-disabled"
+        result = git_raw(linked_repo, "branch", disabled_branch, "HEAD", check=False)
+        combined = result.stdout + result.stderr
+        if "WORKTREE_BRANCH_CREATION_NOT_ALLOWED" in combined or "BRANCH_NAME_NOT_ALLOWED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected config-disabled linked worktree creation to fall through to branch policy\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if ref_exists(linked_repo, f"refs/heads/{disabled_branch}"):
+            raise AssertionError(f"{self.name}: config-disabled invalid branch was created: {disabled_branch}")
+
     def expected_policy_hint_path(self) -> str:
-        return str((self.repo / ".git-flow-guard" / "contribution.md").resolve())
+        return str((self.repo / ".git-guard" / "contribution.md").resolve())
 
     def write_file(self, filename: str, content: str) -> None:
         path = self.repo / filename
@@ -225,6 +311,10 @@ class PolicyHookTestBase:
 
 def git_raw(cwd: Path, *args: str, check: bool = True) -> CommandResult:
     return run_raw(cwd, ["git", *args], check=check)
+
+
+def ref_exists(cwd: Path, ref: str) -> bool:
+    return git_raw(cwd, "show-ref", "--verify", "--quiet", ref, check=False).returncode == 0
 
 
 def run_raw(cwd: Path, args: list[str], check: bool = True) -> CommandResult:

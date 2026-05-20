@@ -10,14 +10,14 @@
     {
       "source": "dev",
       "source_ref": "refs/heads/dev",
-      "target": "release/*",
-      "target_ref": "refs/heads/release/*",
-      "target_ref_regex": "^refs/heads/release/.+$"
+      "target": "feat/*",
+      "target_ref": "refs/heads/feat/*",
+      "target_ref_regex": "^refs/heads/feat/.+$"
     }
   ],
   "branches": {
     "families": [
-      "release/*"
+      "feat/*"
     ],
     "long_lived": [
       "main",
@@ -26,33 +26,29 @@
   },
   "direct_commit_refs": [
     {
-      "name": "dev",
-      "ref": "refs/heads/dev",
-      "ref_regex": "^refs/heads/dev$"
-    },
-    {
-      "name": "release/*",
-      "ref": "refs/heads/release/*",
-      "ref_regex": "^refs/heads/release/.+$"
+      "name": "feat/*",
+      "ref": "refs/heads/feat/*",
+      "ref_regex": "^refs/heads/feat/.+$"
     }
   ],
   "merge_rules": [
     {
-      "id": "release/* to dev",
-      "source": "release/*",
-      "source_ref": "refs/heads/release/*",
-      "source_ref_regex": "^refs/heads/release/.+$",
+      "id": "feat/* to dev",
+      "source": "feat/*",
+      "source_ref": "refs/heads/feat/*",
+      "source_ref_regex": "^refs/heads/feat/.+$",
       "target": "dev",
       "target_ref": "refs/heads/dev"
     },
     {
-      "id": "release/* to main",
-      "source": "release/*",
-      "source_ref": "refs/heads/release/*",
-      "source_ref_regex": "^refs/heads/release/.+$",
+      "id": "dev to main",
+      "source": "dev",
+      "source_ref": "refs/heads/dev",
+      "source_ref_regex": "^refs/heads/dev$",
       "tag_pattern": "V#.#",
       "tag_ref": "refs/tags/V#.#",
       "tag_ref_regex": "^refs/tags/V[0-9]+\\.[0-9]+$",
+      "tag_required": true,
       "tag_tokens": [
         "#",
         "#"
@@ -67,15 +63,24 @@
   ],
   "required_targets": [
     {
-      "source": "release/*",
-      "source_ref": "refs/heads/release/*",
-      "source_ref_regex": "^refs/heads/release/.+$",
+      "source": "feat/*",
+      "source_ref": "refs/heads/feat/*",
+      "source_ref_regex": "^refs/heads/feat/.+$",
       "target_refs": [
-        "refs/heads/dev",
+        "refs/heads/dev"
+      ],
+      "targets": [
+        "dev"
+      ]
+    },
+    {
+      "source": "dev",
+      "source_ref": "refs/heads/dev",
+      "source_ref_regex": "^refs/heads/dev$",
+      "target_refs": [
         "refs/heads/main"
       ],
       "targets": [
-        "dev",
         "main"
       ]
     }
@@ -83,14 +88,15 @@
   "source": {
     "file": "contribution.md",
     "format": "mermaid.gitGraph",
-    "path": ".git-flow-guard/contribution.md"
+    "path": ".git-guard/contribution.md"
   },
   "tag_rules": [
     {
-      "source": "release/*",
+      "source": "dev",
       "tag_pattern": "V#.#",
       "tag_ref": "refs/tags/V#.#",
       "tag_ref_regex": "^refs/tags/V[0-9]+\\.[0-9]+$",
+      "tag_required": true,
       "tag_tokens": [
         "#",
         "#"

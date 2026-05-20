@@ -23,6 +23,7 @@ class MergeRule:
     target: str
     label: str
     tag: str | None
+    tag_required: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -97,17 +98,12 @@ def parse_gitgraph(block: str) -> ParsedGraph:
             attrs = _parse_attrs(tokens[2:], line_number)
             label = attrs.get("id")
             if not label:
-                raise PolicyParseError(f'Line {line_number}: merge "{source}" is missing id:"SOURCE to TARGET".')
-            expected_label = f"{source} to {current_branch}"
-            if label != expected_label:
-                raise PolicyParseError(
-                    f'Line {line_number}: merge id "{label}" does not match expected "{expected_label}".'
-                )
+                raise PolicyParseError(f'Line {line_number}: merge "{source}" is missing id:"...".')
             merge_rules.append(
                 MergeRule(
                     source=source,
                     target=current_branch,
-                    label=label,
+                    label=merge_rule_id(source, current_branch),
                     tag=attrs.get("tag"),
                 )
             )
@@ -119,7 +115,7 @@ def parse_gitgraph(block: str) -> ParsedGraph:
 
     return ParsedGraph(
         branch_from=branch_from,
-        merge_rules=merge_rules,
+        merge_rules=normalize_merge_rules(merge_rules),
         branches=branches,
         direct_commit_branches=direct_commit_branches,
     )
@@ -141,6 +137,7 @@ def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
             "source_ref_regex": ref_regex(rule.source),
             "target_ref": ref_pattern(rule.target),
             "tag_pattern": rule.tag,
+            "tag_required": rule.tag_required if rule.tag else None,
             "tag_tokens": tag_tokens(rule.tag) if rule.tag else None,
             "tag_ref": ref_pattern(rule.tag, ref_kind="tags") if rule.tag else None,
             "tag_ref_regex": tag_regex(rule.tag) if rule.tag else None,
@@ -185,6 +182,7 @@ def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
                     "source": rule.source,
                     "target": rule.target,
                     "tag_pattern": rule.tag,
+                    "tag_required": rule.tag_required,
                     "tag_tokens": tag_tokens(rule.tag),
                     "tag_ref": ref_pattern(rule.tag, ref_kind="tags"),
                     "tag_ref_regex": tag_regex(rule.tag),
@@ -194,6 +192,65 @@ def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
             ],
         }
     )
+
+
+def normalize_merge_rules(rules: list[MergeRule]) -> list[MergeRule]:
+    grouped: dict[tuple[str, str], list[MergeRule]] = {}
+    order: list[tuple[str, str]] = []
+
+    for rule in rules:
+        key = (rule.source, rule.target)
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(rule)
+
+    normalized: list[MergeRule] = []
+    for key in order:
+        group = grouped[key]
+        untagged = [rule for rule in group if rule.tag is None]
+        tagged = [rule for rule in group if rule.tag is not None]
+        label = merge_rule_id(*key)
+
+        if len(untagged) > 1:
+            raise PolicyParseError(f'Duplicate untagged merge rule "{label}".')
+        if len(tagged) > 1:
+            patterns = ", ".join(str(rule.tag) for rule in tagged)
+            raise PolicyParseError(f'Duplicate tagged merge rule "{label}" with tag patterns: {patterns}.')
+
+        if untagged and tagged:
+            tagged_rule = tagged[0]
+            normalized.append(
+                MergeRule(
+                    source=tagged_rule.source,
+                    target=tagged_rule.target,
+                    label=tagged_rule.label,
+                    tag=tagged_rule.tag,
+                    tag_required=False,
+                )
+            )
+            continue
+
+        if tagged:
+            tagged_rule = tagged[0]
+            normalized.append(
+                MergeRule(
+                    source=tagged_rule.source,
+                    target=tagged_rule.target,
+                    label=tagged_rule.label,
+                    tag=tagged_rule.tag,
+                    tag_required=True,
+                )
+            )
+            continue
+
+        normalized.append(untagged[0])
+
+    return normalized
+
+
+def merge_rule_id(source: str, target: str) -> str:
+    return f"{source} to {target}"
 
 
 def required_targets(rules: list[MergeRule]) -> list[dict[str, Any]]:

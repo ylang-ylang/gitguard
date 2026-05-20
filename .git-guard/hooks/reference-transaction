@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -eu
+repo_root="$(git rev-parse --show-toplevel)"
+git_dir="$(git rev-parse --git-dir)"
+case "$git_dir" in
+  /*) resolved_git_dir="$git_dir" ;;
+  *) resolved_git_dir="$repo_root/$git_dir" ;;
+esac
+export GG_REPO_PATH="$repo_root"
+export GG_POLICY_JSON="$repo_root/.git-guard/policy.json"
+export GG_CONFIG_JSON="$repo_root/.git-guard/config.json"
+export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"
+export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"
+runtime="$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py"
+[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0
+exec python3 "$runtime" "$@"
