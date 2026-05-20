@@ -30,6 +30,7 @@ class ParsedGraph:
     branch_from: list[BranchFrom]
     merge_rules: list[MergeRule]
     branches: list[str]
+    direct_commit_branches: list[str]
 
 
 _MERMAID_BLOCK_RE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
@@ -53,8 +54,10 @@ def extract_gitgraph_block(markdown: str) -> str:
 def parse_gitgraph(block: str) -> ParsedGraph:
     current_branch = "main"
     branches = ["main"]
+    checked_out_branches: set[str] = set()
     branch_from: list[BranchFrom] = []
     merge_rules: list[MergeRule] = []
+    direct_commit_branches: list[str] = []
 
     for line_number, raw_line in enumerate(block.splitlines(), start=1):
         line = raw_line.strip()
@@ -73,6 +76,8 @@ def parse_gitgraph(block: str) -> ParsedGraph:
 
         command = tokens[0]
         if command == "commit":
+            if current_branch != "main" and current_branch in checked_out_branches:
+                _append_unique(direct_commit_branches, current_branch)
             continue
         if command == "branch":
             _require_args(tokens, 2, line_number)
@@ -84,6 +89,7 @@ def parse_gitgraph(block: str) -> ParsedGraph:
             _require_args(tokens, 2, line_number)
             current_branch = tokens[1]
             _append_unique(branches, current_branch)
+            checked_out_branches.add(current_branch)
             continue
         if command == "merge":
             _require_args(tokens, 2, line_number)
@@ -111,7 +117,12 @@ def parse_gitgraph(block: str) -> ParsedGraph:
 
         raise PolicyParseError(f'Line {line_number}: unsupported gitGraph statement "{command}".')
 
-    return ParsedGraph(branch_from=branch_from, merge_rules=merge_rules, branches=branches)
+    return ParsedGraph(
+        branch_from=branch_from,
+        merge_rules=merge_rules,
+        branches=branches,
+        direct_commit_branches=direct_commit_branches,
+    )
 
 
 def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
@@ -149,6 +160,14 @@ def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
                 "families": families,
             },
             "protected_refs": protected_targets,
+            "direct_commit_refs": [
+                {
+                    "name": branch,
+                    "ref": ref_pattern(branch),
+                    "ref_regex": ref_regex(branch),
+                }
+                for branch in graph.direct_commit_branches
+            ],
             "branch_from": [
                 {
                     "source": edge.source,
