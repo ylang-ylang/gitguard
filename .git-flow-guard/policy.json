@@ -24,7 +24,27 @@
       "dev"
     ]
   },
+  "direct_commit_refs": [
+    {
+      "name": "dev",
+      "ref": "refs/heads/dev",
+      "ref_regex": "^refs/heads/dev$"
+    },
+    {
+      "name": "release/*",
+      "ref": "refs/heads/release/*",
+      "ref_regex": "^refs/heads/release/.+$"
+    }
+  ],
   "merge_rules": [
+    {
+      "id": "release/* to dev",
+      "source": "release/*",
+      "source_ref": "refs/heads/release/*",
+      "source_ref_regex": "^refs/heads/release/.+$",
+      "target": "dev",
+      "target_ref": "refs/heads/dev"
+    },
     {
       "id": "release/* to main",
       "source": "release/*",
@@ -42,6 +62,7 @@
     }
   ],
   "protected_refs": [
+    "refs/heads/dev",
     "refs/heads/main"
   ],
   "required_targets": [
@@ -50,9 +71,11 @@
       "source_ref": "refs/heads/release/*",
       "source_ref_regex": "^refs/heads/release/.+$",
       "target_refs": [
+        "refs/heads/dev",
         "refs/heads/main"
       ],
       "targets": [
+        "dev",
         "main"
       ]
     }
