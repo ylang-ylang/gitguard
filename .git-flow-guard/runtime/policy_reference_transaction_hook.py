@@ -180,7 +180,7 @@ def local_policy_tags(repo: Path, policy: dict[str, Any]) -> list[LocalPolicyTag
 
 def tag_target_satisfies_rule(repo: Path, policy: dict[str, Any], rule: dict[str, Any], target_sha: str) -> bool:
     source_refs = refs_matching(repo, source_ref_regex(policy, rule["source"]))
-    if not any(rev_parse(repo, source_ref) == target_sha for source_ref in source_refs):
+    if not any(tag_source_ref_satisfies_rule(repo, rule, source_ref, target_sha) for source_ref in source_refs):
         return False
     return all(ref_contains(repo, target_ref, target_sha) for target_ref in required_target_refs(policy, rule["source"]))
 
@@ -465,7 +465,7 @@ def validate_tag(repo: Path, policy: dict[str, Any], proposed: dict[str, str], u
 
         matched_source_refs = []
         for source_ref in source_refs:
-            if rev_parse(repo, source_ref) != update.new:
+            if not tag_source_ref_satisfies_rule(repo, rule, source_ref, update.new):
                 continue
             matched_source_refs.append(source_ref)
             if tag_rule_allows_version(repo, state, rule, source_ref, update.ref, tag_version):
@@ -474,7 +474,7 @@ def validate_tag(repo: Path, policy: dict[str, Any], proposed: dict[str, str], u
         if not matched_source_refs:
             failures.append(
                 HookReject(
-                    "TAG_TARGET_NOT_SOURCE_HEAD",
+                    tag_target_source_failure_code(rule),
                     tag=update.ref,
                     target=short_sha(update.new),
                     source=rule["source"],
@@ -490,7 +490,7 @@ def tag_source_head_matches(repo: Path, policy: dict[str, Any], tag_ref: str, ta
     for rule in policy.get("tag_rules", []):
         source_regex = source_ref_regex(policy, rule["source"])
         for source_ref in refs_matching(repo, source_regex):
-            if rev_parse(repo, source_ref) != target_sha:
+            if not tag_source_ref_satisfies_rule(repo, rule, source_ref, target_sha):
                 continue
             matches.append(
                 {
@@ -501,6 +501,22 @@ def tag_source_head_matches(repo: Path, policy: dict[str, Any], tag_ref: str, ta
                 }
             )
     return matches
+
+
+def tag_source_ref_satisfies_rule(repo: Path, rule: dict[str, Any], source_ref: str, target_sha: str) -> bool:
+    if tag_required(rule):
+        return rev_parse(repo, source_ref) == target_sha
+    return ref_contains(repo, source_ref, target_sha)
+
+
+def tag_required(rule: dict[str, Any]) -> bool:
+    return bool(rule.get("tag_required", True))
+
+
+def tag_target_source_failure_code(rule: dict[str, Any]) -> str:
+    if tag_required(rule):
+        return "TAG_TARGET_NOT_SOURCE_HEAD"
+    return "TAG_TARGET_NOT_SOURCE_HISTORY"
 
 
 def tag_rule_allows_version(
@@ -552,8 +568,9 @@ def preferred_tag_failure(failures: list[HookReject], tag_ref: str) -> HookRejec
         "TAG_PATTERN_COMPONENT_MISMATCH": 2,
         "TAG_BASE_RELEASE_MISSING": 3,
         "TAG_TARGET_NOT_SOURCE_HEAD": 4,
-        "TAG_REQUIRED_TARGETS_MISSING": 5,
-        "TAG_SOURCE_BRANCH_MISSING": 6,
+        "TAG_TARGET_NOT_SOURCE_HISTORY": 5,
+        "TAG_REQUIRED_TARGETS_MISSING": 6,
+        "TAG_SOURCE_BRANCH_MISSING": 7,
     }
     return min(failures, key=lambda failure: priority.get(failure.code, 100))
 
@@ -736,6 +753,8 @@ def update_pending_tags(repo: Path, pending_tags: dict[str, Any], candidate: Sou
     tag_pattern = rule.get("tag_pattern")
     tag_ref_regex = rule.get("tag_ref_regex")
     if not tag_pattern or not tag_ref_regex:
+        return
+    if not tag_required(rule):
         return
 
     key = pending_tag_key(candidate.ref, rule["target_ref"], tag_pattern)
