@@ -34,17 +34,17 @@ The policy tests install hooks through the package CLI:
 PYTHONPATH=src python -m cli install --repo .tmp/<config_name> --config <config_name> --scope worktree
 ```
 
-If you installed the isolated uv tool, use `git-flow-guard` in place of `PYTHONPATH=src python -m cli`.
+If you installed the isolated uv tool, use `git-guard` in place of `PYTHONPATH=src python -m cli`.
 
-The installed contribution document, human-editable `config.json`, enable script, hook wrapper, runtime `policy.json`, and Python runner live inside each generated test repository under `.git-flow-guard/`. This keeps the generated repo usable from both Docker and the host, because `core.hooksPath` does not point at `/workspace/test_env/...`.
+The installed contribution document, human-editable `config.json`, enable script, hook wrapper, runtime `policy.json`, and Python runner live inside each generated test repository under `.git-guard/`. This keeps the generated repo usable from both Docker and the host, because `core.hooksPath` does not point at `/workspace/test_env/...`.
 
-The generated `enable.sh` is intentionally small: it only enables the checked-in hook for the current worktree by setting `core.hooksPath=.git-flow-guard/hooks`.
+The generated `enable.sh` is intentionally small: it only enables the checked-in hook for the current worktree by setting `core.hooksPath=.git-guard/hooks`.
 
 Hook rejection messages must include a policy hint that points at the generated repo's local Markdown file:
 
 ```text
-git-flow-guard: see policy: <repo>/.git-flow-guard/contribution.md
-git-flow-guard: agent guidance: if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook.
+git-guard: see policy: <repo>/.git-guard/contribution.md
+git-guard: agent guidance: if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook.
 ```
 
 The rejection reason itself uses a stable `CODE key=value` format so tests and agents can match exact failure classes without parsing friendly prose.
@@ -72,7 +72,7 @@ Each config test repo is built by a config-specific test class that inherits fro
 2. Add one visible start symbol on the protected integration branch with this merge commit message:
 
 ```text
-=========== GIT FLOW GUARD REJECTION TESTS START ===========
+=========== GIT GUARD REJECTION TESTS START ===========
 ```
 
 The branch used to introduce the marker has a plain commit message, so `git log --graph --all` shows only one visible start symbol.
@@ -86,7 +86,7 @@ After that separator, rejection cases are run against the same repo. Each reject
 If a command that should be rejected is unexpectedly accepted, the test writes a visible failure marker commit before failing:
 
 ```text
-!!!!!!!! GIT FLOW GUARD EXPECTED REJECTION WAS ACCEPTED !!!!!!!!
+!!!!!!!! GIT GUARD EXPECTED REJECTION WAS ACCEPTED !!!!!!!!
 ```
 
 The policy integration tests cover:
@@ -100,8 +100,8 @@ The policy integration tests cover:
 - rejecting multi-target source branches when they are merged to targets out of policy order;
 - rejecting later same-rule tagged merges while an earlier tagged merge is missing its tag;
 - rejecting new local branch creation from linked worktrees;
-- disabling linked worktree branch creation rejection through `.git-flow-guard/config.json`;
-- disabling pre-push missing tag auto-sync through `.git-flow-guard/config.json`;
+- disabling linked worktree branch creation rejection through `.git-guard/config.json`;
+- disabling pre-push missing tag auto-sync through `.git-guard/config.json`;
 - accepting other allowed merge rules while a tagged merge is waiting for its tag;
 - accepting the normal configured branch families, required merge targets, and tag rules before the separator.
 

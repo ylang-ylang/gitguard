@@ -6,7 +6,7 @@ from typing import Any
 from configs.test_base import PolicyHookTestBase
 
 
-START_SYMBOL = "=========== GIT FLOW GUARD REJECTION TESTS START ==========="
+START_SYMBOL = "=========== GIT GUARD REJECTION TESTS START ==========="
 
 
 class DevOnlyHookTest(PolicyHookTestBase):
@@ -94,7 +94,7 @@ class DevOnlyHookTest(PolicyHookTestBase):
         self.assert_pending_tag_count(0)
 
     def state(self) -> dict[str, Any]:
-        return json.loads((self.repo / ".git" / "git-flow-guard-state.json").read_text(encoding="utf-8"))
+        return json.loads((self.repo / ".git" / "git-guard-state.json").read_text(encoding="utf-8"))
 
     def assert_pending_tag_count(self, expected: int) -> None:
         pending_tags = self.state().get("pending_tags", {})

@@ -1,9 +1,9 @@
 ---
-name: git-flow-policy-writer
+name: git-guard-policy-writer
 description: Write or revise CONTRIBUTING.md Mermaid gitGraph policy DSLs for Git branch flow rules that will be parsed into reference-transaction hook policy. Use when asked to create branch workflow docs, normalize gitGraph branch families such as infra/* or release/*, or keep Git flow docs machine-readable for local ref update guards.
 ---
 
-# Git Flow Policy Writer
+# Git Guard Policy Writer
 
 ## Purpose
 
@@ -23,7 +23,7 @@ Write `CONTRIBUTING.md` branch workflow docs where the Mermaid `gitGraph` is a r
 - Interpret `branch X` after `checkout Y` as `Y` may branch to `X`.
 - Interpret `checkout TARGET` followed by `merge "SOURCE"` as `SOURCE` must be allowed to merge into `TARGET`.
 - Write unique Mermaid merge ids because Mermaid treats `id` as a commit id. Prefer readable ids such as `id:"release/* to main"` and use a distinct suffix when the same source and target appear more than once.
-- Git Flow Guard derives the machine policy id from the merge source and current checkout target, not from the Mermaid `id` text.
+- Git Guard derives the machine policy id from the merge source and current checkout target, not from the Mermaid `id` text.
 - Do not encode special semantics in labels such as `back-merge`. If a source family must land in multiple targets, express that by merging it into each target in the graph and describe it as a required merge in prose.
 - If a source family merges into more than one target, treat those targets as required containment targets for the same source family.
 - Put release/hotfix tag symbols directly on the `main` merge statement.

@@ -88,7 +88,7 @@
   "source": {
     "file": "contribution.md",
     "format": "mermaid.gitGraph",
-    "path": ".git-flow-guard/contribution.md"
+    "path": ".git-guard/contribution.md"
   },
   "tag_rules": [
     {
