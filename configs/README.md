@@ -12,6 +12,6 @@ Maintain `contribution.md` by hand. The installer parses it and writes `.git-flo
 Current configs:
 
 - `dev-only`: `main` and `dev`; direct `dev` work merges to `main`, with an optional `V#.#` release tag.
-- `dev-release`: `main`, `dev`, and `feat/*`; feature work merges into `dev`, and `main` only accepts tagged `dev` releases.
+- `dev-feat`: `main`, `dev`, and `feat/*`; feature work merges into `dev`, and `main` only accepts tagged `dev` releases.
 - `dev-feat-release-hotfix`: `main`, `dev`, `feat/*`, `release/*`, `hotfix/*`.
 - `dev-infra-feat-release-hotfix`: `main`, `dev`, `infra/*`, `feat/*`, `release/*`, `hotfix/*`.
