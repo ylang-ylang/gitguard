@@ -8,6 +8,7 @@ case "$git_dir" in
 esac
 export GFG_REPO_PATH="$repo_root"
 export GFG_POLICY_JSON="$repo_root/.git-flow-guard/policy.json"
+export GFG_CONFIG_JSON="$repo_root/.git-flow-guard/config.json"
 export GFG_STATE_JSON="$resolved_git_dir/git-flow-guard-state.json"
 export GFG_LOG_PATH="$resolved_git_dir/git-flow-guard-hook.log"
 exec python3 "$repo_root/.git-flow-guard/runtime/policy_reference_transaction_hook.py" pre-push "$@"

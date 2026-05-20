@@ -9,7 +9,7 @@ It is intended for repositories that want branch-flow rules to be written once i
 The default workflow does not require installing into Python at all:
 
 ```bash
-PYTHONPATH=src python -m git_flow_guard.cli --help
+PYTHONPATH=src python -m cli --help
 ```
 
 This only uses the checkout as source code. It does not write to system Python, user site-packages, or global Python package state.
@@ -93,7 +93,7 @@ v=.=.#
 Install one config into a target repository:
 
 ```bash
-PYTHONPATH=src python -m git_flow_guard.cli install \
+PYTHONPATH=src python -m cli install \
   --repo /path/to/repo \
   --config dev-infra-feat-release-hotfix \
   --scope worktree
@@ -123,6 +123,7 @@ It copies the packaged runtime hook into the target repo:
 
 ```text
 <repo>/.git-flow-guard/contribution.md
+<repo>/.git-flow-guard/config.json
 <repo>/.git-flow-guard/enable.sh
 <repo>/.git-flow-guard/hooks/pre-push
 <repo>/.git-flow-guard/hooks/reference-transaction
@@ -152,13 +153,30 @@ git-flow-guard: see policy: <repo>/.git-flow-guard/contribution.md
 git-flow-guard: agent guidance: if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook.
 ```
 
+`.git-flow-guard/config.json` is a human-editable local config file. The installer creates it with defaults and does not overwrite it on later installs:
+
+```json
+{
+  "pre_push": {
+    "auto_push_missing_tags": true
+  },
+  "worktree": {
+    "reject_branch_creation_in_linked_worktree": true
+  }
+}
+```
+
 For required `merge ... tag:"..."` rules, Git Flow Guard treats the branch merge and tag creation as separate Git ref transactions. The merge may complete first, then the hook records a pending tag requirement. Until the matching tag is created, the same tagged merge rule is blocked with `PENDING_TAG_REQUIRED`, and the already-merged source ref is locked with `PENDING_TAG_SOURCE_MOVED`. Other allowed merge rules, such as `dev to main`, are not blocked by that pending release tag.
 
 Optional tag rules do not create pending tag requirements. If a matching tag is created later, the hook still validates its name, version order, target branch containment, and immutability.
 
 Policy-managed branches cannot be moved to include another managed branch head unless the Mermaid graph declares that merge direction. This is independent of merge strategy: normal allowed merges may be fast-forward or `--no-ff`. For example, if the graph has `dev to main` but no `main to dev`, `git branch -f dev main` is rejected even when the underlying ref move is a fast-forward.
 
-Before any push, the installed `pre-push` hook checks local tags that satisfy the configured release tag rules. If a matching local release tag is missing from the target remote, the hook prints a visible `auto-pushing missing release tags` message and pushes that tag first. If the remote already has the same tag name pointing at a different object, the push is rejected with `PUSH_TAG_CONFLICT`.
+Linked worktrees cannot create new local branches while the hook is enabled. A linked worktree is detected when `git rev-parse --git-dir` and `git rev-parse --git-common-dir` resolve to different directories. In that case, `git branch new-name`, `git switch -c new-name`, and other branch-creation ref transactions are rejected with `WORKTREE_BRANCH_CREATION_NOT_ALLOWED`. Create the new branch from the main worktree and give it its own worktree directory instead.
+
+This guard only covers branch creation because it is enforced by the `reference-transaction` hook. Switching a linked worktree to an already-existing branch is not blocked by this hook because that operation does not create a branch ref.
+
+Before any push, the installed `pre-push` hook checks local tags that satisfy the configured release tag rules. If `.git-flow-guard/config.json` keeps `pre_push.auto_push_missing_tags` enabled and a matching local release tag is missing from the target remote, the hook prints a visible `auto-pushing missing release tags` message and pushes that tag first. If the remote already has the same tag name pointing at a different object, the push is rejected with `PUSH_TAG_CONFLICT`.
 
 Runtime state is stored in the target repo's Git directory:
 
@@ -175,11 +193,11 @@ Run package-level checks without installation:
 
 ```bash
 PYTHONPATH=src python -m py_compile \
-  src/git_flow_guard/__init__.py \
-  src/git_flow_guard/cli.py \
-  src/git_flow_guard/install.py \
-  src/git_flow_guard/mermaid.py \
-  src/git_flow_guard/runtime/reference_transaction_hook.py \
+  src/cli.py \
+  src/install.py \
+  src/mermaid.py \
+  src/runtime/__init__.py \
+  src/runtime/reference_transaction_hook.py \
   test_env/run_policy_hook_tests.py \
   configs/__init__.py \
   configs/test_base.py \

@@ -2,17 +2,24 @@
 from __future__ import annotations
 
 import argparse
-import importlib.resources
 import json
 import shutil
 import subprocess
 from pathlib import Path
 
-from git_flow_guard.mermaid import PolicyParseError, load_policy_from_markdown
+from mermaid import PolicyParseError, load_policy_from_markdown
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALID_SCOPES = ("worktree", "local", "global")
+DEFAULT_CONFIG = {
+    "pre_push": {
+        "auto_push_missing_tags": True,
+    },
+    "worktree": {
+        "reject_branch_creation_in_linked_worktree": True,
+    },
+}
 
 
 class InstallError(RuntimeError):
@@ -118,9 +125,12 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
     runtime_runner.chmod(0o755)
 
     policy_path = install_dir / "policy.json"
+    config_path = install_dir / "config.json"
     state_path = git_dir / "git-flow-guard-state.json"
     log_path = git_dir / "git-flow-guard-hook.log"
     policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True), encoding="utf-8")
+    if not config_path.exists():
+        config_path.write_text(default_config_text(), encoding="utf-8")
 
     hook_path = hook_dir / "reference-transaction"
     hook_path.write_text(reference_transaction_hook(), encoding="utf-8")
@@ -140,9 +150,14 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
     print("core.hooksPath=.git-flow-guard/hooks")
     print(f"contribution={installed_contribution_path}")
     print(f"policy={policy_path}")
+    print(f"config={config_path}")
     print(f"state={state_path}")
     print(f"log={log_path}")
     print(f"enable={enable_path}")
+
+
+def default_config_text() -> str:
+    return json.dumps(DEFAULT_CONFIG, indent=2, sort_keys=True) + "\n"
 
 
 def reference_transaction_hook() -> str:
@@ -158,6 +173,7 @@ def reference_transaction_hook() -> str:
             "esac",
             'export GFG_REPO_PATH="$repo_root"',
             'export GFG_POLICY_JSON="$repo_root/.git-flow-guard/policy.json"',
+            'export GFG_CONFIG_JSON="$repo_root/.git-flow-guard/config.json"',
             'export GFG_STATE_JSON="$resolved_git_dir/git-flow-guard-state.json"',
             'export GFG_LOG_PATH="$resolved_git_dir/git-flow-guard-hook.log"',
             'exec python3 "$repo_root/.git-flow-guard/runtime/policy_reference_transaction_hook.py" "$@"',
@@ -179,6 +195,7 @@ def pre_push_hook() -> str:
             "esac",
             'export GFG_REPO_PATH="$repo_root"',
             'export GFG_POLICY_JSON="$repo_root/.git-flow-guard/policy.json"',
+            'export GFG_CONFIG_JSON="$repo_root/.git-flow-guard/config.json"',
             'export GFG_STATE_JSON="$resolved_git_dir/git-flow-guard-state.json"',
             'export GFG_LOG_PATH="$resolved_git_dir/git-flow-guard-hook.log"',
             'exec python3 "$repo_root/.git-flow-guard/runtime/policy_reference_transaction_hook.py" pre-push "$@"',
@@ -241,8 +258,7 @@ def resolve_config(config: str | Path) -> Path:
 
 
 def load_runtime_hook_text() -> str:
-    resource = importlib.resources.files("git_flow_guard").joinpath("runtime/reference_transaction_hook.py")
-    return resource.read_text(encoding="utf-8")
+    return (Path(__file__).resolve().parent / "runtime" / "reference_transaction_hook.py").read_text(encoding="utf-8")
 
 
 def resolved_git_dir(repo: Path) -> Path:

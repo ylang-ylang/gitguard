@@ -15,13 +15,12 @@ authors = [
 dependencies = []
 
 [project.scripts]
-git-flow-guard = "git_flow_guard.cli:main"
+git-flow-guard = "cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+py-modules = ["cli", "install", "mermaid"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-git_flow_guard = ["runtime/*.py"]
+include = ["runtime"]

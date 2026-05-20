@@ -12,6 +12,14 @@ from typing import Any
 
 
 ZERO = "0" * 40
+DEFAULT_CONFIG = {
+    "pre_push": {
+        "auto_push_missing_tags": True,
+    },
+    "worktree": {
+        "reject_branch_creation_in_linked_worktree": True,
+    },
+}
 AGENT_REJECT_HINT = (
     "if you are an agent, read the contribution document and use the configured workflow; "
     "do not try to bypass this hook."
@@ -81,17 +89,22 @@ def main() -> int:
 
     command = sys.argv[1]
     repo = Path(required_env("GFG_REPO_PATH"))
-    policy = json.loads(Path(required_env("GFG_POLICY_JSON")).read_text(encoding="utf-8"))
+    policy_path = Path(required_env("GFG_POLICY_JSON"))
+    config_path = Path(os.environ.get("GFG_CONFIG_JSON", repo / ".git-flow-guard" / "config.json"))
     state_path = Path(os.environ.get("GFG_STATE_JSON", repo / ".git" / "gfg-state.json"))
     log_path = os.environ.get("GFG_LOG_PATH")
+    policy: dict[str, Any] = {}
 
     try:
+        policy = load_json_object(policy_path, invalid_code="POLICY_INVALID")
+        config = load_config(config_path)
+
         if command == "pre-push":
             if len(sys.argv) != 4:
                 raise HookReject("HOOK_PRE_PUSH_USAGE", argv=sys.argv[1:])
             if os.environ.get("GFG_INTERNAL_TAG_SYNC") == "1":
                 return 0
-            validate_pre_push(repo, policy, sys.argv[2], sys.argv[3], read_push_updates(sys.stdin))
+            validate_pre_push(repo, policy, config, sys.argv[2], sys.argv[3], read_push_updates(sys.stdin))
             return 0
 
         if len(sys.argv) != 2:
@@ -102,7 +115,7 @@ def main() -> int:
             append_log(Path(log_path), command, updates)
 
         if command == "prepared":
-            validate_prepared(repo, policy, state_path, updates)
+            validate_prepared(repo, policy, config, state_path, updates)
         elif command == "committed":
             update_committed_state(repo, policy, state_path, updates)
         elif command == "aborted":
@@ -111,6 +124,12 @@ def main() -> int:
             raise HookReject("HOOK_UNSUPPORTED_PHASE", phase=command)
     except HookReject as exc:
         print(f"git-flow-guard: {exc}", file=sys.stderr)
+        if exc.code == "WORKTREE_BRANCH_CREATION_NOT_ALLOWED":
+            print(
+                "git-flow-guard: linked worktrees should keep one branch per directory; "
+                "create a new worktree directory for this branch from the main worktree.",
+                file=sys.stderr,
+            )
         source_path = policy_hint_path(repo, policy)
         if source_path:
             print(f"git-flow-guard: see policy: {source_path}", file=sys.stderr)
@@ -131,9 +150,58 @@ def policy_hint_path(repo: Path, policy: dict[str, Any]) -> str | None:
     return str((repo / path).resolve())
 
 
+def load_json_object(path: Path, invalid_code: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise HookReject(invalid_code, path=path, error=str(exc)) from exc
+    except json.JSONDecodeError as exc:
+        raise HookReject(invalid_code, path=path, error=exc.msg) from exc
+
+    if not isinstance(value, dict):
+        raise HookReject(invalid_code, path=path, error="expected JSON object")
+    return value
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return default_config()
+    return merge_config(load_json_object(path, invalid_code="CONFIG_INVALID"))
+
+
+def default_config() -> dict[str, Any]:
+    return {
+        section: dict(values)
+        for section, values in DEFAULT_CONFIG.items()
+    }
+
+
+def merge_config(config: dict[str, Any]) -> dict[str, Any]:
+    merged = default_config()
+    for key, value in config.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key].update(value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def config_bool(config: dict[str, Any], section: str, key: str) -> bool:
+    section_value = config.get(section, {})
+    if not isinstance(section_value, dict):
+        raise HookReject("CONFIG_INVALID", key=section, expected="object")
+
+    default_value = DEFAULT_CONFIG[section][key]
+    value = section_value.get(key, default_value)
+    if not isinstance(value, bool):
+        raise HookReject("CONFIG_INVALID", key=f"{section}.{key}", expected="boolean")
+    return value
+
+
 def validate_pre_push(
     repo: Path,
     policy: dict[str, Any],
+    config: dict[str, Any],
     remote_name: str,
     remote_url: str,
     updates: list[PushUpdate],
@@ -161,7 +229,8 @@ def validate_pre_push(
                 upstream=short_sha(remote_sha),
             )
 
-    auto_push_missing_tags(repo, remote, remote_name, missing_tags)
+    if config_bool(config, "pre_push", "auto_push_missing_tags"):
+        auto_push_missing_tags(repo, remote, remote_name, missing_tags)
 
 
 def local_policy_tags(repo: Path, policy: dict[str, Any]) -> list[LocalPolicyTag]:
@@ -223,7 +292,9 @@ def auto_push_missing_tags(repo: Path, remote: str, display_remote: str, tags: l
         )
 
 
-def validate_prepared(repo: Path, policy: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
+def validate_prepared(repo: Path, policy: dict[str, Any], config: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
+    enforce_linked_worktree_branch_creation_guard(repo, config, updates)
+
     state = load_state(state_path)
     pending = state.get("pending", {})
     pending_tags = state.get("pending_tags", {})
@@ -258,6 +329,25 @@ def validate_branch_name(policy: dict[str, Any], ref: str) -> None:
     if is_allowed_branch_ref(policy, ref):
         return
     raise HookReject("BRANCH_NAME_NOT_ALLOWED", ref=ref)
+
+
+def enforce_linked_worktree_branch_creation_guard(repo: Path, config: dict[str, Any], updates: list[RefUpdate]) -> None:
+    if not config_bool(config, "worktree", "reject_branch_creation_in_linked_worktree"):
+        return
+
+    created_branch = next(
+        (update for update in updates if update.old == ZERO and update.new != ZERO and update.ref.startswith("refs/heads/")),
+        None,
+    )
+    if not created_branch or not is_linked_worktree(repo):
+        return
+    raise HookReject("WORKTREE_BRANCH_CREATION_NOT_ALLOWED", ref=created_branch.ref)
+
+
+def is_linked_worktree(repo: Path) -> bool:
+    git_dir = git(repo, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip()
+    common_dir = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    return git_dir != common_dir
 
 
 def is_allowed_branch_ref(policy: dict[str, Any], ref: str) -> bool:

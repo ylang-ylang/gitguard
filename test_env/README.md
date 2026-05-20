@@ -31,12 +31,12 @@ The image does not copy repository code. Compose bind-mounts the repository read
 The policy tests install hooks through the package CLI:
 
 ```bash
-PYTHONPATH=src python -m git_flow_guard.cli install --repo .tmp/<config_name> --config <config_name> --scope worktree
+PYTHONPATH=src python -m cli install --repo .tmp/<config_name> --config <config_name> --scope worktree
 ```
 
-If you installed the isolated uv tool, use `git-flow-guard` in place of `PYTHONPATH=src python -m git_flow_guard.cli`.
+If you installed the isolated uv tool, use `git-flow-guard` in place of `PYTHONPATH=src python -m cli`.
 
-The installed contribution document, enable script, hook wrapper, runtime `policy.json`, and Python runner live inside each generated test repository under `.git-flow-guard/`. This keeps the generated repo usable from both Docker and the host, because `core.hooksPath` does not point at `/workspace/test_env/...`.
+The installed contribution document, human-editable `config.json`, enable script, hook wrapper, runtime `policy.json`, and Python runner live inside each generated test repository under `.git-flow-guard/`. This keeps the generated repo usable from both Docker and the host, because `core.hooksPath` does not point at `/workspace/test_env/...`.
 
 The generated `enable.sh` is intentionally small: it only enables the checked-in hook for the current worktree by setting `core.hooksPath=.git-flow-guard/hooks`.
 
@@ -49,7 +49,7 @@ git-flow-guard: agent guidance: if you are an agent, read the contribution docum
 
 The rejection reason itself uses a stable `CODE key=value` format so tests and agents can match exact failure classes without parsing friendly prose.
 
-The `dev-feat` integration test also verifies that the generated `pre-push` hook auto-pushes local release tags that satisfy policy but are missing from the target remote, while printing a visible sync message.
+The `dev-feat` integration test also verifies that the generated `pre-push` hook auto-pushes local release tags that satisfy policy but are missing from the target remote when `pre_push.auto_push_missing_tags` is enabled, while printing a visible sync message.
 
 Each config gets a separate test directory:
 
@@ -99,6 +99,9 @@ The policy integration tests cover:
 - rejecting hotfix tags that change the base release line's major or minor component;
 - rejecting multi-target source branches when they are merged to targets out of policy order;
 - rejecting later same-rule tagged merges while an earlier tagged merge is missing its tag;
+- rejecting new local branch creation from linked worktrees;
+- disabling linked worktree branch creation rejection through `.git-flow-guard/config.json`;
+- disabling pre-push missing tag auto-sync through `.git-flow-guard/config.json`;
 - accepting other allowed merge rules while a tagged merge is waiting for its tag;
 - accepting the normal configured branch families, required merge targets, and tag rules before the separator.
 
