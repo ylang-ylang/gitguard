@@ -111,13 +111,24 @@ def main() -> int:
             raise HookReject("HOOK_UNSUPPORTED_PHASE", phase=command)
     except HookReject as exc:
         print(f"git-flow-guard: {exc}", file=sys.stderr)
-        source_path = policy.get("source", {}).get("path")
+        source_path = policy_hint_path(repo, policy)
         if source_path:
             print(f"git-flow-guard: see policy: {source_path}", file=sys.stderr)
         print(f"git-flow-guard: agent guidance: {AGENT_REJECT_HINT}", file=sys.stderr)
         return 1
 
     return 0
+
+
+def policy_hint_path(repo: Path, policy: dict[str, Any]) -> str | None:
+    source_path = policy.get("source", {}).get("path")
+    if not source_path:
+        return None
+
+    path = Path(source_path)
+    if path.is_absolute():
+        return str(path)
+    return str((repo / path).resolve())
 
 
 def validate_pre_push(
