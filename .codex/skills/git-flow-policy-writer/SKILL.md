@@ -22,10 +22,12 @@ Write `CONTRIBUTING.md` branch workflow docs where the Mermaid `gitGraph` is a r
 - Always quote wildcard branch names in gitGraph statements: `branch "infra/*"`, `checkout "infra/*"`, `merge "infra/*"`.
 - Interpret `branch X` after `checkout Y` as `Y` may branch to `X`.
 - Interpret `checkout TARGET` followed by `merge "SOURCE"` as `SOURCE` must be allowed to merge into `TARGET`.
-- Write merge ids in exact machine-friendly form without angle brackets: `id:"SOURCE to TARGET"`, for example `id:"release/* to main"`.
+- Write unique Mermaid merge ids because Mermaid treats `id` as a commit id. Prefer readable ids such as `id:"release/* to main"` and use a distinct suffix when the same source and target appear more than once.
+- Git Flow Guard derives the machine policy id from the merge source and current checkout target, not from the Mermaid `id` text.
 - Do not encode special semantics in labels such as `back-merge`. If a source family must land in multiple targets, express that by merging it into each target in the graph and describe it as a required merge in prose.
 - If a source family merges into more than one target, treat those targets as required containment targets for the same source family.
 - Put release/hotfix tag symbols directly on the `main` merge statement.
+- To express an optional tag, draw the same source-to-target merge twice: once without `tag:"..."` and once with `tag:"..."`. Give the two Mermaid merge commits different `id` values.
 - Use tag patterns directly in `tag:"..."` so the graph remains the source of truth:
   - release main merge: `tag:"v#.#.0"`
   - two-component release main merge: `tag:"V#.#"`
@@ -78,7 +80,8 @@ gitGraph TB:
 ## Validation Checklist
 
 - Confirm every wildcard branch family is quoted in `gitGraph`.
-- Confirm every `merge` has an `id:"SOURCE to TARGET"` label that matches the merge statement.
+- Confirm every `merge` has a unique Mermaid `id:"..."`.
+- Confirm repeated source-to-target merges are used only for optional tag semantics.
 - Confirm `release/*` and `hotfix/*` merge into both `main` and `dev`.
 - Confirm release/hotfix tag symbols are attached to their `main` merge statements.
 - Confirm tag patterns are explicit numeric patterns: release often uses `v#.#.0` or `V#.#`, hotfix uses `v=.=.#`.
