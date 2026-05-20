@@ -42,7 +42,7 @@ def load_test_case(config_dir: Path) -> type[Any]:
     if not test_path.exists():
         raise AssertionError(f"missing config test case: {test_path}")
 
-    module_name = f"git_flow_guard_config_test_{config_dir.name.replace('-', '_')}"
+    module_name = f"policy_config_test_{config_dir.name.replace('-', '_')}"
     spec = importlib.util.spec_from_file_location(module_name, test_path)
     if spec is None or spec.loader is None:
         raise AssertionError(f"cannot load config test case: {test_path}")

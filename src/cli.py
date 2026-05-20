@@ -3,14 +3,16 @@ from __future__ import annotations
 import argparse
 import sys
 
-from git_flow_guard import __version__
-from git_flow_guard import install as install_module
+import install as install_module
+
+
+__version__ = "0.1.0"
 
 
 def main() -> int:
     config_summary = install_module.available_configs_summary()
     parser = argparse.ArgumentParser(
-        prog="git-flow-guard",
+        prog="git-guard",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=config_summary,
     )

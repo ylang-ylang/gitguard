@@ -7,7 +7,7 @@ from typing import Any
 from configs.test_base import PolicyHookTestBase, run_raw
 
 
-START_SYMBOL = "=========== GIT FLOW GUARD REJECTION TESTS START ==========="
+START_SYMBOL = "=========== GIT GUARD REJECTION TESTS START ==========="
 
 
 class DevFeatHookTest(PolicyHookTestBase):
@@ -71,6 +71,7 @@ class DevFeatHookTest(PolicyHookTestBase):
         self.tag("V1.1", self.marker_dev_sha)
         self.assert_pending_tag_count(0)
         self.assert_pre_push_auto_syncs_release_tags()
+        self.assert_pre_push_auto_sync_can_be_disabled()
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
@@ -118,7 +119,7 @@ class DevFeatHookTest(PolicyHookTestBase):
         )
 
     def state(self) -> dict[str, Any]:
-        return json.loads((self.repo / ".git" / "git-flow-guard-state.json").read_text(encoding="utf-8"))
+        return json.loads((self.repo / ".git" / "git-guard-state.json").read_text(encoding="utf-8"))
 
     def assert_pending_tag_count(self, expected: int) -> None:
         pending_tags = self.state().get("pending_tags", {})
@@ -146,6 +147,31 @@ class DevFeatHookTest(PolicyHookTestBase):
             expected_line = f"{expected}\trefs/tags/{tag}"
             if expected_line not in remote_tags:
                 raise AssertionError(f"{self.name}: remote is missing synced tag {tag}\nexpected: {expected_line}\nremote tags:\n{remote_tags}")
+
+    def assert_pre_push_auto_sync_can_be_disabled(self) -> None:
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config.setdefault("pre_push", {})["auto_push_missing_tags"] = False
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        remote = self.work_root.parent / f"{self.name}-manual-tags-remote.git"
+        if remote.exists():
+            shutil.rmtree(remote)
+        run_raw(self.work_root.parent, ["git", "init", "--bare", str(remote)])
+        self.git("remote", "add", "manual-tags", str(remote))
+
+        result = self.git("push", "manual-tags", "main")
+        combined = result.stdout + result.stderr
+        if "auto-pushing missing release tags" in combined:
+            raise AssertionError(f"{self.name}: pre-push auto-sync ran even though config disabled it\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+
+        remote_tags = self.git("ls-remote", "--tags", "manual-tags").stdout
+        for tag in ["V1.0", "V1.1"]:
+            if f"refs/tags/{tag}" in remote_tags:
+                raise AssertionError(f"{self.name}: remote unexpectedly received disabled auto-sync tag {tag}\nremote tags:\n{remote_tags}")
+
+        config.setdefault("pre_push", {})["auto_push_missing_tags"] = True
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 TEST_CASE = DevFeatHookTest

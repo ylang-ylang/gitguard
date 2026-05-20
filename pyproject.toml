@@ -3,25 +3,24 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "git-flow-guard"
+name = "git-guard"
 version = "0.1.0"
 description = "Generate and enforce Git branch-flow policies from Mermaid gitGraph documents."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-  { name = "git-flow-guard contributors" }
+  { name = "git-guard contributors" }
 ]
 dependencies = []
 
 [project.scripts]
-git-flow-guard = "git_flow_guard.cli:main"
+git-guard = "cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+py-modules = ["cli", "install", "mermaid"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-git_flow_guard = ["runtime/*.py"]
+include = ["runtime"]
