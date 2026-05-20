@@ -7,7 +7,7 @@ Required files:
 - `contribution.md`: Mermaid `gitGraph` policy source.
 - `test_case.py`: config-specific integration tests.
 
-Maintain `contribution.md` by hand. The installer parses it and writes `.git-flow-guard/policy.json` into the target repository for the hook runtime.
+Maintain `contribution.md` by hand. The installer parses it and writes `.git-guard/policy.json` into the target repository for the hook runtime.
 
 Current configs:
 

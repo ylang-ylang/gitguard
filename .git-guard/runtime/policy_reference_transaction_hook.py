@@ -88,11 +88,11 @@ def main() -> int:
         return 2
 
     command = sys.argv[1]
-    repo = Path(required_env("GFG_REPO_PATH"))
-    policy_path = Path(required_env("GFG_POLICY_JSON"))
-    config_path = Path(os.environ.get("GFG_CONFIG_JSON", repo / ".git-flow-guard" / "config.json"))
-    state_path = Path(os.environ.get("GFG_STATE_JSON", repo / ".git" / "gfg-state.json"))
-    log_path = os.environ.get("GFG_LOG_PATH")
+    repo = Path(required_env("GG_REPO_PATH"))
+    policy_path = Path(required_env("GG_POLICY_JSON"))
+    config_path = Path(os.environ.get("GG_CONFIG_JSON", repo / ".git-guard" / "config.json"))
+    state_path = Path(os.environ.get("GG_STATE_JSON", repo / ".git" / "git-guard-state.json"))
+    log_path = os.environ.get("GG_LOG_PATH")
     policy: dict[str, Any] = {}
 
     try:
@@ -102,7 +102,7 @@ def main() -> int:
         if command == "pre-push":
             if len(sys.argv) != 4:
                 raise HookReject("HOOK_PRE_PUSH_USAGE", argv=sys.argv[1:])
-            if os.environ.get("GFG_INTERNAL_TAG_SYNC") == "1":
+            if os.environ.get("GG_INTERNAL_TAG_SYNC") == "1":
                 return 0
             validate_pre_push(repo, policy, config, sys.argv[2], sys.argv[3], read_push_updates(sys.stdin))
             return 0
@@ -123,17 +123,17 @@ def main() -> int:
         else:
             raise HookReject("HOOK_UNSUPPORTED_PHASE", phase=command)
     except HookReject as exc:
-        print(f"git-flow-guard: {exc}", file=sys.stderr)
+        print(f"git-guard: {exc}", file=sys.stderr)
         if exc.code == "WORKTREE_BRANCH_CREATION_NOT_ALLOWED":
             print(
-                "git-flow-guard: linked worktrees should keep one branch per directory; "
+                "git-guard: linked worktrees should keep one branch per directory; "
                 "create a new worktree directory for this branch from the main worktree.",
                 file=sys.stderr,
             )
         source_path = policy_hint_path(repo, policy)
         if source_path:
-            print(f"git-flow-guard: see policy: {source_path}", file=sys.stderr)
-        print(f"git-flow-guard: agent guidance: {AGENT_REJECT_HINT}", file=sys.stderr)
+            print(f"git-guard: see policy: {source_path}", file=sys.stderr)
+        print(f"git-guard: agent guidance: {AGENT_REJECT_HINT}", file=sys.stderr)
         return 1
 
     return 0
@@ -271,13 +271,13 @@ def auto_push_missing_tags(repo: Path, remote: str, display_remote: str, tags: l
 
     tag_refs = [tag.ref for tag in tags]
     print(
-        "git-flow-guard: auto-pushing missing release tags "
+        "git-guard: auto-pushing missing release tags "
         f"remote={format_context_value(display_remote)} tags={format_context_value(tag_refs)}",
         file=sys.stderr,
     )
     for tag in tags:
         env = os.environ.copy()
-        env["GFG_INTERNAL_TAG_SYNC"] = "1"
+        env["GG_INTERNAL_TAG_SYNC"] = "1"
         result = git_with_env(repo, env, "push", remote, f"{tag.ref}:{tag.ref}", check=False)
         if result.returncode != 0:
             raise HookReject(
@@ -287,7 +287,7 @@ def auto_push_missing_tags(repo: Path, remote: str, display_remote: str, tags: l
                 stderr=result.stderr.strip(),
             )
         print(
-            f"git-flow-guard: auto-pushed release tag tag={tag.ref} remote={format_context_value(display_remote)}",
+            f"git-guard: auto-pushed release tag tag={tag.ref} remote={format_context_value(display_remote)}",
             file=sys.stderr,
         )
 
@@ -525,7 +525,7 @@ def validate_tag(repo: Path, policy: dict[str, Any], proposed: dict[str, str], u
     if not rules:
         raise HookReject("TAG_NAME_NOT_ALLOWED", tag=update.ref)
     tag_version = parse_version_ref(update.ref)
-    state = load_state(Path(os.environ.get("GFG_STATE_JSON", repo / ".git" / "gfg-state.json")))
+    state = load_state(Path(os.environ.get("GG_STATE_JSON", repo / ".git" / "git-guard-state.json")))
     failures: list[HookReject] = []
 
     for rule in rules:

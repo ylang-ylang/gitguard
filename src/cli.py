@@ -12,7 +12,7 @@ __version__ = "0.1.0"
 def main() -> int:
     config_summary = install_module.available_configs_summary()
     parser = argparse.ArgumentParser(
-        prog="git-flow-guard",
+        prog="git-guard",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=config_summary,
     )

@@ -7,7 +7,7 @@ from typing import Any
 from configs.test_base import PolicyHookTestBase, run_raw
 
 
-START_SYMBOL = "=========== GIT FLOW GUARD REJECTION TESTS START ==========="
+START_SYMBOL = "=========== GIT GUARD REJECTION TESTS START ==========="
 
 
 class DevFeatHookTest(PolicyHookTestBase):
@@ -119,7 +119,7 @@ class DevFeatHookTest(PolicyHookTestBase):
         )
 
     def state(self) -> dict[str, Any]:
-        return json.loads((self.repo / ".git" / "git-flow-guard-state.json").read_text(encoding="utf-8"))
+        return json.loads((self.repo / ".git" / "git-guard-state.json").read_text(encoding="utf-8"))
 
     def assert_pending_tag_count(self, expected: int) -> None:
         pending_tags = self.state().get("pending_tags", {})
@@ -149,7 +149,7 @@ class DevFeatHookTest(PolicyHookTestBase):
                 raise AssertionError(f"{self.name}: remote is missing synced tag {tag}\nexpected: {expected_line}\nremote tags:\n{remote_tags}")
 
     def assert_pre_push_auto_sync_can_be_disabled(self) -> None:
-        config_path = self.repo / ".git-flow-guard" / "config.json"
+        config_path = self.repo / ".git-guard" / "config.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         config.setdefault("pre_push", {})["auto_push_missing_tags"] = False
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")

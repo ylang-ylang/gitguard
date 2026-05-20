@@ -28,7 +28,7 @@ class InstallError(RuntimeError):
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Install git-flow-guard hooks into a Git repository.",
+        description="Install git-guard hooks into a Git repository.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=available_configs_summary(),
     )
@@ -105,9 +105,9 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
     contribution_path = resolve_config(config)
     policy = load_policy_from_markdown(contribution_path)
 
-    install_dir = repo / ".git-flow-guard"
-    hook_dir = repo / ".git-flow-guard" / "hooks"
-    runtime_dir = repo / ".git-flow-guard" / "runtime"
+    install_dir = repo / ".git-guard"
+    hook_dir = repo / ".git-guard" / "hooks"
+    runtime_dir = repo / ".git-guard" / "runtime"
     hook_dir.mkdir(parents=True, exist_ok=True)
     runtime_dir.mkdir(parents=True, exist_ok=True)
 
@@ -126,8 +126,8 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
 
     policy_path = install_dir / "policy.json"
     config_path = install_dir / "config.json"
-    state_path = git_dir / "git-flow-guard-state.json"
-    log_path = git_dir / "git-flow-guard-hook.log"
+    state_path = git_dir / "git-guard-state.json"
+    log_path = git_dir / "git-guard-hook.log"
     policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True), encoding="utf-8")
     if not config_path.exists():
         config_path.write_text(default_config_text(), encoding="utf-8")
@@ -145,9 +145,9 @@ def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Pat
     enable_path.chmod(0o755)
 
     configure_hooks_path(repo, scope)
-    print(f"installed git-flow-guard hook into {repo}")
+    print(f"installed git-guard hook into {repo}")
     print(f"scope={scope}")
-    print("core.hooksPath=.git-flow-guard/hooks")
+    print("core.hooksPath=.git-guard/hooks")
     print(f"contribution={installed_contribution_path}")
     print(f"policy={policy_path}")
     print(f"config={config_path}")
@@ -171,12 +171,12 @@ def reference_transaction_hook() -> str:
             '  /*) resolved_git_dir="$git_dir" ;;',
             '  *) resolved_git_dir="$repo_root/$git_dir" ;;',
             "esac",
-            'export GFG_REPO_PATH="$repo_root"',
-            'export GFG_POLICY_JSON="$repo_root/.git-flow-guard/policy.json"',
-            'export GFG_CONFIG_JSON="$repo_root/.git-flow-guard/config.json"',
-            'export GFG_STATE_JSON="$resolved_git_dir/git-flow-guard-state.json"',
-            'export GFG_LOG_PATH="$resolved_git_dir/git-flow-guard-hook.log"',
-            'exec python3 "$repo_root/.git-flow-guard/runtime/policy_reference_transaction_hook.py" "$@"',
+            'export GG_REPO_PATH="$repo_root"',
+            'export GG_POLICY_JSON="$repo_root/.git-guard/policy.json"',
+            'export GG_CONFIG_JSON="$repo_root/.git-guard/config.json"',
+            'export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
+            'export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
+            'exec python3 "$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py" "$@"',
             "",
         ]
     )
@@ -193,12 +193,12 @@ def pre_push_hook() -> str:
             '  /*) resolved_git_dir="$git_dir" ;;',
             '  *) resolved_git_dir="$repo_root/$git_dir" ;;',
             "esac",
-            'export GFG_REPO_PATH="$repo_root"',
-            'export GFG_POLICY_JSON="$repo_root/.git-flow-guard/policy.json"',
-            'export GFG_CONFIG_JSON="$repo_root/.git-flow-guard/config.json"',
-            'export GFG_STATE_JSON="$resolved_git_dir/git-flow-guard-state.json"',
-            'export GFG_LOG_PATH="$resolved_git_dir/git-flow-guard-hook.log"',
-            'exec python3 "$repo_root/.git-flow-guard/runtime/policy_reference_transaction_hook.py" pre-push "$@"',
+            'export GG_REPO_PATH="$repo_root"',
+            'export GG_POLICY_JSON="$repo_root/.git-guard/policy.json"',
+            'export GG_CONFIG_JSON="$repo_root/.git-guard/config.json"',
+            'export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
+            'export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
+            'exec python3 "$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py" pre-push "$@"',
             "",
         ]
     )
@@ -212,9 +212,9 @@ def enable_script() -> str:
             'repo_root="$(git rev-parse --show-toplevel)"',
             'cd "$repo_root"',
             "git config extensions.worktreeConfig true",
-            "git config --worktree core.hooksPath .git-flow-guard/hooks",
-            'printf "%s\\n" "enabled git-flow-guard hooks for $repo_root"',
-            'printf "%s\\n" "core.hooksPath=.git-flow-guard/hooks"',
+            "git config --worktree core.hooksPath .git-guard/hooks",
+            'printf "%s\\n" "enabled git-guard hooks for $repo_root"',
+            'printf "%s\\n" "core.hooksPath=.git-guard/hooks"',
             "",
         ]
     )
@@ -229,7 +229,7 @@ def configure_hooks_path(repo: Path, scope: str) -> None:
         args.append("--local")
     elif scope == "global":
         args.append("--global")
-    args.extend(["core.hooksPath", ".git-flow-guard/hooks"])
+    args.extend(["core.hooksPath", ".git-guard/hooks"])
     git(repo, *args)
 
 

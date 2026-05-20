@@ -13,7 +13,7 @@ from mermaid import load_policy_from_markdown
 
 
 FINISH_SYMBOL = "========test finished========"
-UNEXPECTED_ACCEPTANCE_SYMBOL = "!!!!!!!! GIT FLOW GUARD EXPECTED REJECTION WAS ACCEPTED !!!!!!!!"
+UNEXPECTED_ACCEPTANCE_SYMBOL = "!!!!!!!! GIT GUARD EXPECTED REJECTION WAS ACCEPTED !!!!!!!!"
 EXPECTED_AGENT_HINT = "if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook."
 
 
@@ -78,38 +78,38 @@ class PolicyHookTestBase:
     def install_hook(self) -> None:
         install_policy_hook(self.repo, self.config_dir, scope="worktree")
         expected_files = [
-            self.repo / ".git-flow-guard" / "contribution.md",
-            self.repo / ".git-flow-guard" / "config.json",
-            self.repo / ".git-flow-guard" / "policy.json",
-            self.repo / ".git-flow-guard" / "enable.sh",
-            self.repo / ".git-flow-guard" / "hooks" / "reference-transaction",
-            self.repo / ".git-flow-guard" / "hooks" / "pre-push",
-            self.repo / ".git-flow-guard" / "runtime" / "policy_reference_transaction_hook.py",
+            self.repo / ".git-guard" / "contribution.md",
+            self.repo / ".git-guard" / "config.json",
+            self.repo / ".git-guard" / "policy.json",
+            self.repo / ".git-guard" / "enable.sh",
+            self.repo / ".git-guard" / "hooks" / "reference-transaction",
+            self.repo / ".git-guard" / "hooks" / "pre-push",
+            self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py",
         ]
         for path in expected_files:
             if not path.exists():
                 raise AssertionError(f"{self.name}: installed file is missing: {path}")
-        if (self.repo / ".git-flow-guard" / "policy.yaml").exists():
+        if (self.repo / ".git-guard" / "policy.yaml").exists():
             raise AssertionError(f"{self.name}: policy.yaml should not be installed")
-        policy = json.loads((self.repo / ".git-flow-guard" / "policy.json").read_text(encoding="utf-8"))
+        policy = json.loads((self.repo / ".git-guard" / "policy.json").read_text(encoding="utf-8"))
         source = policy.get("source", {})
-        if source.get("path") != ".git-flow-guard/contribution.md":
+        if source.get("path") != ".git-guard/contribution.md":
             raise AssertionError(f"{self.name}: policy source path should be repo-relative, got {source.get('path')!r}")
         if Path(source["path"]).is_absolute():
             raise AssertionError(f"{self.name}: policy source path should not be absolute: {source['path']}")
         if "original_path" in source:
             raise AssertionError(f"{self.name}: policy source should not include original_path: {source['original_path']}")
-        config = json.loads((self.repo / ".git-flow-guard" / "config.json").read_text(encoding="utf-8"))
+        config = json.loads((self.repo / ".git-guard" / "config.json").read_text(encoding="utf-8"))
         if config.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
             raise AssertionError(f"{self.name}: config should enable linked worktree branch creation guard by default")
         if config.get("pre_push", {}).get("auto_push_missing_tags") is not True:
             raise AssertionError(f"{self.name}: config should enable missing tag auto-push by default")
         self.git_no_hooks("config", "--worktree", "--unset", "core.hooksPath", check=False)
-        result = self.run_command([".git-flow-guard/enable.sh"], check=True)
-        if "core.hooksPath=.git-flow-guard/hooks" not in result.stdout:
+        result = self.run_command([".git-guard/enable.sh"], check=True)
+        if "core.hooksPath=.git-guard/hooks" not in result.stdout:
             raise AssertionError(f"{self.name}: enable.sh did not report hook path\nstdout:\n{result.stdout}")
         hook_path = self.git_no_hooks("config", "--worktree", "--get", "core.hooksPath").stdout.strip()
-        if hook_path != ".git-flow-guard/hooks":
+        if hook_path != ".git-guard/hooks":
             raise AssertionError(f"{self.name}: enable.sh set unexpected hooksPath: {hook_path}")
 
     def expect_rejected(
@@ -210,7 +210,7 @@ class PolicyHookTestBase:
                 f"{self.name}: expected linked worktree rejection guidance\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
-        expected_policy_hint = f"see policy: {(linked_repo / '.git-flow-guard' / 'contribution.md').resolve()}"
+        expected_policy_hint = f"see policy: {(linked_repo / '.git-guard' / 'contribution.md').resolve()}"
         if expected_policy_hint not in combined:
             raise AssertionError(
                 f"{self.name}: expected linked worktree policy hint {expected_policy_hint!r}\n"
@@ -238,7 +238,7 @@ class PolicyHookTestBase:
                 "reject_branch_creation_in_linked_worktree": False,
             },
         }
-        (linked_repo / ".git-flow-guard" / "config.json").write_text(
+        (linked_repo / ".git-guard" / "config.json").write_text(
             json.dumps(disabled_config, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
@@ -255,7 +255,7 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: config-disabled invalid branch was created: {disabled_branch}")
 
     def expected_policy_hint_path(self) -> str:
-        return str((self.repo / ".git-flow-guard" / "contribution.md").resolve())
+        return str((self.repo / ".git-guard" / "contribution.md").resolve())
 
     def write_file(self, filename: str, content: str) -> None:
         path = self.repo / filename
