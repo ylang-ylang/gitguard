@@ -1,6 +1,6 @@
 services:
   policy-hook-tests:
-    image: git-flow-guard-test-env
+    image: git-guard-test-env
     build:
       context: .
       dockerfile: test_env/Dockerfile
@@ -23,7 +23,7 @@ services:
       - /workspace/.tmp
 
   reference-transaction-smoke:
-    image: git-flow-guard-test-env
+    image: git-guard-test-env
     build:
       context: .
       dockerfile: test_env/Dockerfile

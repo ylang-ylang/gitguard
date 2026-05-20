@@ -3,7 +3,7 @@ from __future__ import annotations
 from configs.test_base import PolicyHookTestBase
 
 
-START_SYMBOL = "=========== GIT FLOW GUARD REJECTION TESTS START ==========="
+START_SYMBOL = "=========== GIT GUARD REJECTION TESTS START ==========="
 
 
 class InfraFeatReleaseHookTest(PolicyHookTestBase):
