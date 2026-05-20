@@ -62,7 +62,7 @@ For example:
 ```text
 .tmp/dev-feat-release-hotfix
 .tmp/dev-infra-feat-release-hotfix
-.tmp/dev-only
+.tmp/dev-feat
 .tmp/dev-release
 ```
 
