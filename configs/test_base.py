@@ -105,12 +105,16 @@ class PolicyHookTestBase:
         if config.get("pre_push", {}).get("auto_push_missing_tags") is not True:
             raise AssertionError(f"{self.name}: config should enable missing tag auto-push by default")
         self.git_no_hooks("config", "--worktree", "--unset", "core.hooksPath", check=False)
+        self.git_no_hooks("config", "--local", "--unset", "core.hooksPath", check=False)
         result = self.run_command([".git-guard/enable.sh"], check=True)
         if "core.hooksPath=.git-guard/hooks" not in result.stdout:
             raise AssertionError(f"{self.name}: enable.sh did not report hook path\nstdout:\n{result.stdout}")
-        hook_path = self.git_no_hooks("config", "--worktree", "--get", "core.hooksPath").stdout.strip()
+        hook_path = self.git_no_hooks("config", "--local", "--get", "core.hooksPath").stdout.strip()
         if hook_path != ".git-guard/hooks":
             raise AssertionError(f"{self.name}: enable.sh set unexpected hooksPath: {hook_path}")
+        worktree_hook_path = self.git_no_hooks("config", "--worktree", "--get", "core.hooksPath", check=False)
+        if worktree_hook_path.returncode == 0:
+            raise AssertionError(f"{self.name}: enable.sh should not set worktree hooksPath: {worktree_hook_path.stdout.strip()}")
 
     def expect_rejected(
         self,
