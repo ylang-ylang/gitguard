@@ -34,8 +34,8 @@ def main() -> int:
     install_parser.add_argument(
         "--scope",
         choices=install_module.VALID_SCOPES,
-        default="worktree",
-        help="Where to write Git core.hooksPath: worktree, local, or global. Default: worktree.",
+        default="local",
+        help="Where to write Git core.hooksPath: worktree, local, or global. Default: local.",
     )
 
     args = parser.parse_args()

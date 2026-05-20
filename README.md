@@ -96,7 +96,7 @@ Install one config into a target repository:
 PYTHONPATH=src python -m cli install \
   --repo /path/to/repo \
   --config dev-infra-feat-release-hotfix \
-  --scope worktree
+  --scope local
 ```
 
 `--config` accepts:
@@ -107,8 +107,8 @@ PYTHONPATH=src python -m cli install \
 
 `--scope` controls where `core.hooksPath` is written:
 
-- `worktree`: writes to this worktree's config. This is the default and is best for multi-worktree development.
-- `local`: writes to the repository-local config.
+- `local`: writes to the repository-local config. This is the default and is shared by linked worktrees that use the same common Git directory.
+- `worktree`: writes to this worktree's config only.
 - `global`: writes to the user's global Git config.
 
 The installer writes a repo-relative hook path:
@@ -137,7 +137,7 @@ After a protected repository is cloned, users do not need to install this Python
 ./.git-guard/enable.sh
 ```
 
-`enable.sh` only writes local Git config for the current worktree:
+`enable.sh` writes repository-local Git config, so linked worktrees that share the same common Git directory use the same hook path. It does not write global Git config:
 
 ```text
 core.hooksPath=.git-guard/hooks
