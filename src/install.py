@@ -41,8 +41,8 @@ def main() -> int:
     parser.add_argument(
         "--scope",
         choices=VALID_SCOPES,
-        default="worktree",
-        help="Where to write Git core.hooksPath: worktree, local, or global. Default: worktree.",
+        default="local",
+        help="Where to write Git core.hooksPath: worktree, local, or global. Default: local.",
     )
     args = parser.parse_args()
     return run_install_command(repo=args.repo, config=args.config, scope=args.scope, parser=parser)
@@ -88,7 +88,7 @@ def run_install_command(repo: str | Path, config: str | Path, scope: str, parser
     return 0
 
 
-def install(repo: Path, config: str | Path, scope: str = "worktree", runner: Path | None = None) -> None:
+def install(repo: Path, config: str | Path, scope: str = "local", runner: Path | None = None) -> None:
     if scope not in VALID_SCOPES:
         raise InstallError(f"invalid scope {scope!r}; expected one of {', '.join(VALID_SCOPES)}")
 
@@ -176,7 +176,9 @@ def reference_transaction_hook() -> str:
             'export GG_CONFIG_JSON="$repo_root/.git-guard/config.json"',
             'export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
             'export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
-            'exec python3 "$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py" "$@"',
+            'runtime="$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py"',
+            '[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
+            'exec python3 "$runtime" "$@"',
             "",
         ]
     )
@@ -198,7 +200,9 @@ def pre_push_hook() -> str:
             'export GG_CONFIG_JSON="$repo_root/.git-guard/config.json"',
             'export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
             'export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
-            'exec python3 "$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py" pre-push "$@"',
+            'runtime="$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py"',
+            '[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
+            'exec python3 "$runtime" pre-push "$@"',
             "",
         ]
     )
@@ -211,9 +215,8 @@ def enable_script() -> str:
             "set -eu",
             'repo_root="$(git rev-parse --show-toplevel)"',
             'cd "$repo_root"',
-            "git config extensions.worktreeConfig true",
-            "git config --worktree core.hooksPath .git-guard/hooks",
-            'printf "%s\\n" "enabled git-guard hooks for $repo_root"',
+            "git config --local core.hooksPath .git-guard/hooks",
+            'printf "%s\\n" "enabled git-guard hooks for repository $repo_root"',
             'printf "%s\\n" "core.hooksPath=.git-guard/hooks"',
             "",
         ]

@@ -11,4 +11,6 @@ export GG_POLICY_JSON="$repo_root/.git-guard/policy.json"
 export GG_CONFIG_JSON="$repo_root/.git-guard/config.json"
 export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"
 export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"
-exec python3 "$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py" "$@"
+runtime="$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py"
+[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0
+exec python3 "$runtime" "$@"
