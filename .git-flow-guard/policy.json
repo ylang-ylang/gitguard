@@ -26,14 +26,6 @@
   },
   "merge_rules": [
     {
-      "id": "dev to main",
-      "source": "dev",
-      "source_ref": "refs/heads/dev",
-      "source_ref_regex": "^refs/heads/dev$",
-      "target": "main",
-      "target_ref": "refs/heads/main"
-    },
-    {
       "id": "release/* to main",
       "source": "release/*",
       "source_ref": "refs/heads/release/*",
@@ -54,17 +46,6 @@
   ],
   "required_targets": [
     {
-      "source": "dev",
-      "source_ref": "refs/heads/dev",
-      "source_ref_regex": "^refs/heads/dev$",
-      "target_refs": [
-        "refs/heads/main"
-      ],
-      "targets": [
-        "main"
-      ]
-    },
-    {
       "source": "release/*",
       "source_ref": "refs/heads/release/*",
       "source_ref_regex": "^refs/heads/release/.+$",
@@ -79,8 +60,7 @@
   "source": {
     "file": "contribution.md",
     "format": "mermaid.gitGraph",
-    "original_path": "/home/ylang/python_module/git-flow-guard/configs/dev-release/contribution.md",
-    "path": "/home/ylang/python_module/git-flow-guard/.git-flow-guard/contribution.md"
+    "path": ".git-flow-guard/contribution.md"
   },
   "tag_rules": [
     {
