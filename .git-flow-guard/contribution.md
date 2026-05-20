@@ -1,4 +1,4 @@
-# Dev Release Flow
+# Dev Feat Flow
 
 ```mermaid
 gitGraph TB:

@@ -10,8 +10,8 @@ from configs.test_base import PolicyHookTestBase, run_raw
 START_SYMBOL = "=========== GIT FLOW GUARD REJECTION TESTS START ==========="
 
 
-class DevReleaseHookTest(PolicyHookTestBase):
-    config_name = "dev-release"
+class DevFeatHookTest(PolicyHookTestBase):
+    config_name = "dev-feat"
 
     def create_initial_repo(self) -> None:
         self.git("init", "-b", "main")
@@ -148,4 +148,4 @@ class DevReleaseHookTest(PolicyHookTestBase):
                 raise AssertionError(f"{self.name}: remote is missing synced tag {tag}\nexpected: {expected_line}\nremote tags:\n{remote_tags}")
 
 
-TEST_CASE = DevReleaseHookTest
+TEST_CASE = DevFeatHookTest

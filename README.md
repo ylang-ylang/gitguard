@@ -184,7 +184,7 @@ PYTHONPATH=src python -m py_compile \
   configs/__init__.py \
   configs/test_base.py \
   configs/dev-only/test_case.py \
-  configs/dev-release/test_case.py \
+  configs/dev-feat/test_case.py \
   configs/dev-feat-release-hotfix/test_case.py \
   configs/dev-infra-feat-release-hotfix/test_case.py
 ```
@@ -203,7 +203,7 @@ The integration test runner creates one isolated test repo per config:
 .tmp/dev-feat-release-hotfix
 .tmp/dev-infra-feat-release-hotfix
 .tmp/dev-only
-.tmp/dev-release
+.tmp/dev-feat
 ```
 
 Each test repo contains a valid example Git DAG, then a visible start marker before rejection tests:

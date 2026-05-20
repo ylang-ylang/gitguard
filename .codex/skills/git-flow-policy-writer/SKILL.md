@@ -36,6 +36,17 @@ Write `CONTRIBUTING.md` branch workflow docs where the Mermaid `gitGraph` is a r
 - Interpret `=` in tag patterns as the same numeric component as the base release tag for this source branch.
 - Use `v`/`V` exactly as the policy wants tags to be written.
 
+## Naming Rules
+
+- Before writing or revising a config, compare the config directory name, document title, prose, tests, and Mermaid branch families.
+- Name configs by the branch families that actually appear in the Mermaid `gitGraph`, not by whether the flow produces a tagged release.
+- Use `dev-only` only for `main` plus `dev` with no wildcard branch family.
+- Use `dev-feat` for `main`, `dev`, and `feat/*` when there is no `release/*` branch family, even if `dev` merges to `main` with a release tag.
+- Use `dev-release` only when the Mermaid graph actually contains a `release/*` branch family.
+- Include family names such as `infra`, `feat`, `release`, and `hotfix` in the config name only when those wildcard families exist in the graph.
+- Keep the first Markdown heading aligned with the config name, for example `# Dev Feat Flow` for `dev-feat`.
+- If a requested name contradicts the branch families, flag the mismatch before implementing or rename the config to match the graph.
+
 ## Preferred Graph Shape
 
 Use this shape unless the user gives different branch families:
@@ -87,3 +98,4 @@ gitGraph TB:
 - Confirm tag patterns are explicit numeric patterns: release often uses `v#.#.0` or `V#.#`, hotfix uses `v=.=.#`.
 - Confirm there are no example-only branch names if the policy is intended to cover a full family.
 - Confirm the accompanying prose and any flowchart do not contradict the `gitGraph`.
+- Confirm config names and Markdown titles match the branch families: `dev + feat/*` without `release/*` must be named `dev-feat`, not `dev-release`.
