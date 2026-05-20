@@ -180,7 +180,7 @@ def local_policy_tags(repo: Path, policy: dict[str, Any]) -> list[LocalPolicyTag
 
 def tag_target_satisfies_rule(repo: Path, policy: dict[str, Any], rule: dict[str, Any], target_sha: str) -> bool:
     source_refs = refs_matching(repo, source_ref_regex(policy, rule["source"]))
-    if not any(tag_source_ref_satisfies_rule(repo, rule, source_ref, target_sha) for source_ref in source_refs):
+    if not any(ref_contains(repo, source_ref, target_sha) for source_ref in source_refs):
         return False
     return all(ref_contains(repo, target_ref, target_sha) for target_ref in required_target_refs(policy, rule["source"]))
 

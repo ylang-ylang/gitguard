@@ -30,93 +30,92 @@ class DevReleaseHookTest(PolicyHookTestBase):
         self.git("checkout", "main")
 
     def create_correct_git_dag_tree(self) -> None:
-        self.merge_to("dev", "main")
-        self.create_completed_release_flow()
+        self.create_feature_release()
 
     def create_rejection_test_fixtures(self) -> None:
-        pass
+        self.create_unmerged_feature_fixture()
 
     def mark_rejection_tests_start(self) -> None:
-        self.git("checkout", "dev")
-        self.write_file("TEST_START.txt", START_SYMBOL + "\n")
-        self.git("add", "TEST_START.txt")
-        self.git("commit", "-m", START_SYMBOL)
+        branch = "feat/test-start"
+        self.create_branch(branch, "dev")
+        self.start_marker_sha = self.commit_file(branch, "TEST_START.txt", START_SYMBOL + "\n", START_SYMBOL)
+        self.merge_to(branch, "dev", message=START_SYMBOL)
+        self.marker_dev_sha = self.rev_parse("dev")
 
     def run_rejection_tests(self) -> None:
-        self.expect_dev_force_move_to_main_rejected()
+        self.expect_rejected(["branch", "feat/from-main", "main"], "BRANCH_SOURCE_MISMATCH")
+        self.expect_rejected(["branch", "release/demo", "dev"], "BRANCH_NAME_NOT_ALLOWED")
 
-        self.create_pending_release_flow()
-        self.assert_pending_tag_count(1)
-
-        self.create_allowed_dev_merge_while_release_tag_pending()
-        self.assert_pending_tag_count(1)
-
-        self.expect_pending_release_source_move_rejected()
-        self.assert_pending_tag_count(1)
-
-        self.create_blocked_release_flow()
+        self.git("checkout", "dev")
         self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", "release/1.2"],
-            "PENDING_TAG_REQUIRED",
-            cleanup=self.cleanup_merge_state,
+            ["commit", "--allow-empty", "-m", "direct dev commit"],
+            "PROTECTED_REF_NO_ALLOWED_SOURCE",
         )
 
-        self.tag("V1.1", self.pending_release_sha)
-        self.assert_pending_tag_count(0)
+        self.git("checkout", "main")
+        self.expect_rejected(
+            ["commit", "--allow-empty", "-m", "direct main commit"],
+            "PROTECTED_REF_NO_ALLOWED_SOURCE",
+        )
+        self.expect_rejected(["tag", "V2.0", "main"], "TAG_TARGET_NOT_SOURCE_HEAD")
 
-        self.merge_to("release/1.2", "main")
-        self.tag("V1.2", self.blocked_release_sha)
+        self.expect_rejected(["tag", "v1.1", self.marker_dev_sha], "TAG_SOURCE_TAG_PATTERN_MISMATCH")
+        self.expect_rejected(["tag", "V1.1.0", self.marker_dev_sha], "TAG_SOURCE_TAG_PATTERN_MISMATCH")
+        self.expect_rejected(["tag", "V1.1", self.unmerged_feature_sha], "TAG_REQUIRED_TARGETS_MISSING")
+
+        self.create_pending_dev_release()
+        self.assert_pending_tag_count(1)
+        self.expect_rejected(["tag", "V0.9", self.marker_dev_sha], "TAG_VERSION_NOT_INCREMENTAL")
+        self.expect_pending_dev_source_move_rejected()
+        self.assert_pending_tag_count(1)
+        self.tag("V1.1", self.marker_dev_sha)
         self.assert_pending_tag_count(0)
         self.assert_pre_push_auto_syncs_release_tags()
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
 
-    def create_completed_release_flow(self) -> None:
-        branch = "release/1.0"
+    def create_feature_release(self) -> None:
+        branch = "feat/initial"
         self.create_branch(branch, "dev")
-        self.release_sha = self.commit_file(branch, "release-1.0.txt", "release 1.0\n", "release 1.0")
+        self.feature_sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
         self.merge_to(branch, "dev")
-        self.merge_to(branch, "main")
-        self.tag("V1.0", self.release_sha)
-        self.assert_is_ancestor(self.release_sha, "dev")
-        self.assert_is_ancestor(self.release_sha, "main")
+        self.dev_release_sha = self.rev_parse("dev")
+        self.merge_to("dev", "main")
+        self.tag("V1.0", self.dev_release_sha)
+        self.assert_is_ancestor(self.feature_sha, "dev")
+        self.assert_is_ancestor(self.dev_release_sha, "main")
         self.assert_pending_tag_count(0)
 
-    def expect_dev_force_move_to_main_rejected(self) -> None:
-        self.merge_to("dev", "main")
-        self.expect_rejected(["branch", "-f", "dev", "main"], "PROTECTED_REF_NO_ALLOWED_SOURCE")
-
-    def create_pending_release_flow(self) -> None:
-        branch = "release/1.1"
+    def create_unmerged_feature_fixture(self) -> None:
+        branch = "feat/unmerged"
         self.create_branch(branch, "dev")
-        self.pending_release_sha = self.commit_file(branch, "release-1.1.txt", "release 1.1\n", "release 1.1")
-        self.merge_to(branch, "dev")
-        self.merge_to(branch, "main")
-        self.assert_is_ancestor(self.pending_release_sha, "dev")
-        self.assert_is_ancestor(self.pending_release_sha, "main")
+        self.unmerged_feature_sha = self.commit_file(
+            branch,
+            "unmerged-feature.txt",
+            "unmerged feature\n",
+            "fixture unmerged feature",
+        )
 
-    def create_allowed_dev_merge_while_release_tag_pending(self) -> None:
-        self.dev_pending_sha = self.commit_file("dev", "dev-pending.txt", "dev while release tag pending\n", "dev while release tag pending")
+    def create_pending_dev_release(self) -> None:
         self.merge_to("dev", "main")
-        self.assert_is_ancestor(self.dev_pending_sha, "main")
+        self.assert_is_ancestor(self.marker_dev_sha, "main")
 
-    def expect_pending_release_source_move_rejected(self) -> None:
-        self.git("checkout", "release/1.1")
-        self.write_file("release-1.1-move.txt", "move pending release\n")
-        self.git("add", "release-1.1-move.txt")
+    def expect_pending_dev_source_move_rejected(self) -> None:
+        branch = "feat/pending-move"
+        self.create_branch(branch, "dev")
+        self.pending_move_sha = self.commit_file(
+            branch,
+            "pending-move.txt",
+            "pending move\n",
+            "pending dev move",
+        )
+        self.git("checkout", "dev")
         self.expect_rejected(
-            ["commit", "-m", "move pending release"],
+            ["merge", "--no-ff", "--no-edit", branch],
             "PENDING_TAG_SOURCE_MOVED",
             cleanup=self.cleanup_merge_state,
         )
-
-    def create_blocked_release_flow(self) -> None:
-        branch = "release/1.2"
-        self.create_branch(branch, "dev")
-        self.blocked_release_sha = self.commit_file(branch, "release-1.2.txt", "release 1.2\n", "release 1.2")
-        self.merge_to(branch, "dev")
-        self.git("checkout", "main")
 
     def state(self) -> dict[str, Any]:
         return json.loads((self.repo / ".git" / "git-flow-guard-state.json").read_text(encoding="utf-8"))
@@ -137,12 +136,12 @@ class DevReleaseHookTest(PolicyHookTestBase):
         combined = result.stdout + result.stderr
         if "auto-pushing missing release tags" not in combined:
             raise AssertionError(f"{self.name}: pre-push did not announce missing release tag sync\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
-        for tag in ["V1.0", "V1.1", "V1.2"]:
+        for tag in ["V1.0", "V1.1"]:
             if f"auto-pushed release tag tag=refs/tags/{tag}" not in combined:
                 raise AssertionError(f"{self.name}: pre-push did not announce synced tag {tag}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
 
         remote_tags = self.git("ls-remote", "--tags", "origin").stdout
-        for tag in ["V1.0", "V1.1", "V1.2"]:
+        for tag in ["V1.0", "V1.1"]:
             expected = self.rev_parse(tag)
             expected_line = f"{expected}\trefs/tags/{tag}"
             if expected_line not in remote_tags:
