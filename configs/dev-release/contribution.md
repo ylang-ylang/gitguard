@@ -6,9 +6,11 @@ gitGraph TB:
     branch dev
     checkout dev
     commit id:"dev baseline"
-    commit id:"direct dev work"
+    checkout main
+    merge dev id:"dev to main"
 
     %% Release from dev back to dev, then to main
+    checkout dev
     branch "release/*"
     checkout "release/*"
     commit id:"release hardening"
@@ -20,10 +22,7 @@ gitGraph TB:
 
 ## Rules
 
-- `dev` is the only development branch and may receive direct commits.
+- `dev` may merge directly to `main`.
 - `release/*` branches from `dev`.
-- `release/*` fixes must merge back to `dev` before they merge into `main`.
-- `release/*` is the only branch family allowed to merge into `main`.
-- `release/*` releases must use a `V#.#` tag, where `#` means one or more decimal digits.
-- `main` must not receive direct commits.
-- Ad hoc tags on `main` are not allowed; release tags are allowed only when they satisfy the `release/* to main` rule.
+- `release/*` fixes must merge back to `dev` before they merge to `main` with a `V#.#` tag.
+- A missing release tag blocks later `release/* to main` merges, but does not block allowed `dev to main` merges.

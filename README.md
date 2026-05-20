@@ -53,8 +53,12 @@ Git Flow Guard intentionally supports a small Mermaid subset:
 
 - `branch NAME`: records a branch-from edge from the current checkout.
 - `checkout NAME`: changes the current target context.
-- `merge NAME id:"SOURCE to TARGET"`: records a merge rule into the current checkout.
-- `merge NAME id:"SOURCE to TARGET" tag:"..."`: records a merge rule plus a tag policy.
+- `merge NAME id:"unique display label"`: records a merge rule into the current checkout.
+- `merge NAME id:"unique display label" tag:"..."`: records a merge rule plus a tag policy.
+
+Mermaid `id` values are commit ids and must be unique within the graph. Git Flow Guard derives the policy rule id from the merge source and current checkout target, for example `dev to main`.
+
+If the same source and target appear once without `tag:"..."` and once with `tag:"..."`, Git Flow Guard treats the tag as optional: the merge is allowed without a tag, but any matching tag is still validated.
 
 Wildcard branch families should be quoted:
 
@@ -148,7 +152,9 @@ git-flow-guard: see policy: <repo>/.git-flow-guard/contribution.md
 git-flow-guard: agent guidance: if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook.
 ```
 
-For `merge ... tag:"..."` rules, Git Flow Guard treats the branch merge and tag creation as separate Git ref transactions. The merge may complete first, then the hook records a pending tag requirement. Until the matching tag is created, the same tagged merge rule is blocked with `PENDING_TAG_REQUIRED`, and the already-merged source ref is locked with `PENDING_TAG_SOURCE_MOVED`. Other allowed merge rules, such as `dev to main`, are not blocked by that pending release tag.
+For required `merge ... tag:"..."` rules, Git Flow Guard treats the branch merge and tag creation as separate Git ref transactions. The merge may complete first, then the hook records a pending tag requirement. Until the matching tag is created, the same tagged merge rule is blocked with `PENDING_TAG_REQUIRED`, and the already-merged source ref is locked with `PENDING_TAG_SOURCE_MOVED`. Other allowed merge rules, such as `dev to main`, are not blocked by that pending release tag.
+
+Optional tag rules do not create pending tag requirements. If a matching tag is created later, the hook still validates its name, version order, target branch containment, and immutability.
 
 Policy-managed branches cannot be moved to include another managed branch head unless the Mermaid graph declares that merge direction. This is independent of merge strategy: normal allowed merges may be fast-forward or `--no-ff`. For example, if the graph has `dev to main` but no `main to dev`, `git branch -f dev main` is rejected even when the underlying ref move is a fast-forward.
 
@@ -177,8 +183,8 @@ PYTHONPATH=src python -m py_compile \
   test_env/run_policy_hook_tests.py \
   configs/__init__.py \
   configs/test_base.py \
+  configs/dev-only/test_case.py \
   configs/dev-release/test_case.py \
-  configs/dev-release_slack/test_case.py \
   configs/dev-feat-release-hotfix/test_case.py \
   configs/dev-infra-feat-release-hotfix/test_case.py
 ```
@@ -196,8 +202,8 @@ The integration test runner creates one isolated test repo per config:
 ```text
 .tmp/dev-feat-release-hotfix
 .tmp/dev-infra-feat-release-hotfix
+.tmp/dev-only
 .tmp/dev-release
-.tmp/dev-release_slack
 ```
 
 Each test repo contains a valid example Git DAG, then a visible start marker before rejection tests:
