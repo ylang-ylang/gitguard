@@ -115,9 +115,10 @@ class PolicyHookTestBase:
             if "GIT_GUARD_BIN" not in hook_text:
                 raise AssertionError(f"{self.name}: {hook_name} hook should support GIT_GUARD_BIN")
         self.assert_install_is_idempotent_and_preserves_config()
+        self.assert_local_install_clears_worktree_hooks_path_override()
         self.assert_runtime_auto_sync_repairs_installed_runtime()
         self.assert_runtime_auto_sync_can_be_disabled()
-        self.git_no_hooks("config", "--worktree", "--unset", "core.hooksPath", check=False)
+        self.git_no_hooks("config", "--worktree", "core.hooksPath", ".git-flow-guard/hooks")
         self.git_no_hooks("config", "--local", "--unset", "core.hooksPath", check=False)
         result = self.run_command([".git-guard/enable.sh"], check=True)
         if "core.hooksPath=.git-guard/hooks" not in result.stdout:
@@ -128,6 +129,24 @@ class PolicyHookTestBase:
         worktree_hook_path = self.git_no_hooks("config", "--worktree", "--get", "core.hooksPath", check=False)
         if worktree_hook_path.returncode == 0:
             raise AssertionError(f"{self.name}: enable.sh should not set worktree hooksPath: {worktree_hook_path.stdout.strip()}")
+
+    def assert_local_install_clears_worktree_hooks_path_override(self) -> None:
+        self.git_no_hooks("config", "--worktree", "core.hooksPath", ".git-flow-guard/hooks")
+        install_policy_hook(self.repo, self.repo / ".git-guard" / "contribution.md", scope="local")
+
+        hook_path = self.git_no_hooks("config", "--local", "--get", "core.hooksPath").stdout.strip()
+        if hook_path != ".git-guard/hooks":
+            raise AssertionError(f"{self.name}: local install set unexpected hooksPath: {hook_path}")
+
+        effective = self.git("config", "--show-scope", "--get", "core.hooksPath").stdout.strip()
+        if effective != "local\t.git-guard/hooks":
+            raise AssertionError(f"{self.name}: local install should be effective, got: {effective}")
+
+        worktree_hook_path = self.git_no_hooks("config", "--worktree", "--get", "core.hooksPath", check=False)
+        if worktree_hook_path.returncode == 0:
+            raise AssertionError(f"{self.name}: local install should clear worktree hooksPath: {worktree_hook_path.stdout.strip()}")
+
+        install_policy_hook(self.repo, self.repo / ".git-guard" / "contribution.md", scope="worktree")
 
     def assert_install_is_idempotent_and_preserves_config(self) -> None:
         config_path = self.repo / ".git-guard" / "config.json"

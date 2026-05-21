@@ -311,6 +311,7 @@ def enable_script() -> str:
             "set -eu",
             'repo_root="$(git rev-parse --show-toplevel)"',
             'cd "$repo_root"',
+            "git config --worktree --unset core.hooksPath >/dev/null 2>&1 || true",
             "git config --local core.hooksPath .git-guard/hooks",
             'printf "%s\\n" "enabled git-guard hooks for repository $repo_root"',
             'printf "%s\\n" "core.hooksPath=.git-guard/hooks"',
@@ -326,6 +327,7 @@ def configure_hooks_path(repo: Path, scope: str) -> bool:
         changed = ensure_worktree_config(repo)
         args.append("--worktree")
     elif scope == "local":
+        changed = unset_worktree_hooks_path(repo)
         args.append("--local")
     elif scope == "global":
         args.append("--global")
@@ -334,6 +336,14 @@ def configure_hooks_path(repo: Path, scope: str) -> bool:
         return changed
     args.extend(["core.hooksPath", ".git-guard/hooks"])
     git(repo, *args)
+    return True
+
+
+def unset_worktree_hooks_path(repo: Path) -> bool:
+    current = git(repo, "config", "--worktree", "--get", "core.hooksPath", check=False)
+    if current.returncode != 0:
+        return False
+    git(repo, "config", "--worktree", "--unset", "core.hooksPath")
     return True
 
 

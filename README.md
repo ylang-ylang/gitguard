@@ -127,7 +127,7 @@ PYTHONPATH=src python -m cli install \
 
 `--scope` controls where `core.hooksPath` is written:
 
-- `local`: writes to the repository-local config. This is the default and is shared by linked worktrees that use the same common Git directory.
+- `local`: writes to the repository-local config. This is the default and is shared by linked worktrees that use the same common Git directory. It also removes this worktree's `core.hooksPath` override so stale worktree config cannot shadow the repository-local hook path.
 - `worktree`: writes to this worktree's config only.
 - `global`: writes to the user's global Git config.
 
@@ -165,7 +165,7 @@ After a protected repository is cloned, users do not need to install this Python
 ./.git-guard/enable.sh
 ```
 
-`enable.sh` writes repository-local Git config, so linked worktrees that share the same common Git directory use the same hook path. It does not write global Git config:
+`enable.sh` writes repository-local Git config, so linked worktrees that share the same common Git directory use the same hook path. It also removes this worktree's `core.hooksPath` override so stale worktree config cannot shadow the repository-local hook path. It does not write global Git config:
 
 ```text
 core.hooksPath=.git-guard/hooks
