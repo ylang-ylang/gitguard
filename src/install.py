@@ -22,6 +22,9 @@ DEFAULT_CONFIG = {
     "runtime": {
         "auto_sync": True,
     },
+    "submodules": {
+        "main_guard": True,
+    },
     "worktree": {
         "reject_branch_creation_in_linked_worktree": True,
     },

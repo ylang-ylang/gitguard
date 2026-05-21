@@ -19,6 +19,9 @@ DEFAULT_CONFIG = {
     "runtime": {
         "auto_sync": True,
     },
+    "submodules": {
+        "main_guard": True,
+    },
     "worktree": {
         "reject_branch_creation_in_linked_worktree": True,
     },
@@ -49,6 +52,12 @@ class PushUpdate:
     local_sha: str
     remote_ref: str
     remote_sha: str
+
+
+@dataclass(frozen=True)
+class SubmoduleGitlink:
+    path: str
+    sha: str
 
 
 @dataclass(frozen=True)
@@ -173,19 +182,27 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def default_config() -> dict[str, Any]:
-    return {
-        section: dict(values)
-        for section, values in DEFAULT_CONFIG.items()
-    }
+    return merge_defaults({}, DEFAULT_CONFIG)
 
 
 def merge_config(config: dict[str, Any]) -> dict[str, Any]:
-    merged = default_config()
+    merged = merge_defaults({}, DEFAULT_CONFIG)
     for key, value in config.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key].update(value)
+            merged[key] = merge_defaults(value, merged[key])
         else:
             merged[key] = value
+    return merged
+
+
+def merge_defaults(config: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(config)
+    for key, default_value in defaults.items():
+        current_value = merged.get(key)
+        if isinstance(current_value, dict) and isinstance(default_value, dict):
+            merged[key] = merge_defaults(current_value, default_value)
+        elif key not in merged:
+            merged[key] = merge_defaults({}, default_value) if isinstance(default_value, dict) else default_value
     return merged
 
 
@@ -297,6 +314,7 @@ def auto_push_missing_tags(repo: Path, remote: str, display_remote: str, tags: l
 
 def validate_prepared(repo: Path, policy: dict[str, Any], config: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
     enforce_linked_worktree_branch_creation_guard(repo, config, updates)
+    enforce_submodule_main_guard(repo, config, updates)
 
     state = load_state(state_path)
     pending = state.get("pending", {})
@@ -351,6 +369,98 @@ def is_linked_worktree(repo: Path) -> bool:
     git_dir = git(repo, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip()
     common_dir = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
     return git_dir != common_dir
+
+
+def enforce_submodule_main_guard(repo: Path, config: dict[str, Any], updates: list[RefUpdate]) -> None:
+    if not config_bool(config, "submodules", "main_guard"):
+        return
+
+    checked: set[tuple[str, str]] = set()
+    for update in updates:
+        if update.new == ZERO or not update.ref.startswith("refs/heads/"):
+            continue
+        for gitlink in submodule_gitlinks(repo, update.new):
+            key = (gitlink.path, gitlink.sha)
+            if key in checked:
+                continue
+            checked.add(key)
+            validate_submodule_main_guard(repo, gitlink)
+
+
+def submodule_gitlinks(repo: Path, commit: str) -> list[SubmoduleGitlink]:
+    result = git(repo, "ls-tree", "-r", "-z", commit)
+    gitlinks: list[SubmoduleGitlink] = []
+    for raw_entry in result.stdout.split("\0"):
+        if not raw_entry:
+            continue
+        meta, path = raw_entry.split("\t", 1)
+        parts = meta.split()
+        if len(parts) == 3 and parts[0] == "160000" and parts[1] == "commit":
+            gitlinks.append(SubmoduleGitlink(path=path, sha=parts[2]))
+    return gitlinks
+
+
+def validate_submodule_main_guard(repo: Path, gitlink: SubmoduleGitlink) -> None:
+    submodule = repo / gitlink.path
+    if not is_git_worktree(submodule):
+        raise HookReject("SUBMODULE_REPO_MISSING", path=gitlink.path, commit=short_sha(gitlink.sha))
+
+    if not commit_exists(submodule, gitlink.sha):
+        raise HookReject("SUBMODULE_COMMIT_MISSING", path=gitlink.path, commit=short_sha(gitlink.sha))
+
+    origin_main = optional_rev_parse(submodule, "refs/remotes/origin/main")
+    local_main = optional_rev_parse(submodule, "refs/heads/main")
+    if origin_main is None and local_main is None:
+        raise HookReject("SUBMODULE_MAIN_REF_MISSING", path=gitlink.path, commit=short_sha(gitlink.sha))
+
+    if origin_main is not None:
+        if gitlink.sha == origin_main:
+            return
+        if is_ancestor(submodule, gitlink.sha, origin_main):
+            warn(
+                "SUBMODULE_BEHIND_ORIGIN_MAIN",
+                path=gitlink.path,
+                commit=short_sha(gitlink.sha),
+                origin_main=short_sha(origin_main),
+            )
+            return
+
+    if local_main is not None and is_ancestor(submodule, gitlink.sha, local_main):
+        warn(
+            "SUBMODULE_NOT_ON_ORIGIN_MAIN_BUT_ON_LOCAL_MAIN",
+            path=gitlink.path,
+            commit=short_sha(gitlink.sha),
+            origin_main=short_sha(origin_main),
+            local_main=short_sha(local_main),
+        )
+        return
+
+    raise HookReject(
+        "SUBMODULE_COMMIT_NOT_ALLOWED",
+        path=gitlink.path,
+        commit=short_sha(gitlink.sha),
+        origin_main=short_sha(origin_main),
+        local_main=short_sha(local_main),
+    )
+
+
+def is_git_worktree(path: Path) -> bool:
+    return git(path, "rev-parse", "--show-toplevel", check=False).returncode == 0
+
+
+def commit_exists(repo: Path, commit: str) -> bool:
+    return git(repo, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode == 0
+
+
+def optional_rev_parse(repo: Path, ref: str) -> str | None:
+    result = git(repo, "rev-parse", "--verify", ref, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def warn(code: str, **context: Any) -> None:
+    print(f"git-guard: {format_reject(code, context)}", file=sys.stderr)
 
 
 def is_allowed_branch_ref(policy: dict[str, Any], ref: str) -> bool:

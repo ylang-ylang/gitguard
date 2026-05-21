@@ -191,6 +191,9 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
   "runtime": {
     "auto_sync": true
   },
+  "submodules": {
+    "main_guard": true
+  },
   "worktree": {
     "reject_branch_creation_in_linked_worktree": true
   }
@@ -210,6 +213,14 @@ Linked worktrees cannot create new local branches while the hook is enabled. A l
 This guard only covers branch creation because it is enforced by the `reference-transaction` hook. Switching a linked worktree to an already-existing branch is not blocked by this hook because that operation does not create a branch ref.
 
 Before any push, the installed `pre-push` hook checks local tags that satisfy the configured release tag rules. If `.git-guard/config.json` keeps `pre_push.auto_push_missing_tags` enabled and a matching local release tag is missing from the target remote, the hook prints a visible `auto-pushing missing release tags` message and pushes that tag first. If the remote already has the same tag name pointing at a different object, the push is rejected with `PUSH_TAG_CONFLICT`.
+
+If `.git-guard/config.json` keeps the boolean `submodules.main_guard` enabled, every local branch ref update checks all submodule gitlinks in the target commit. A gitlink that equals the submodule's local `refs/remotes/origin/main` tip is accepted silently. A gitlink behind local `origin/main`, or a gitlink only reachable from local `refs/heads/main`, is accepted with a visible warning. A gitlink that is not reachable from either ref is rejected with `SUBMODULE_COMMIT_NOT_ALLOWED`. Missing submodule worktrees, missing submodule commits, or missing both main refs are rejected because Git Guard cannot verify the submodule state.
+
+This guard does not fetch remotes. The `origin/main` decision uses the submodule's locally known remote-tracking ref. Refresh submodule refs before committing when needed:
+
+```bash
+git submodule foreach 'git fetch origin main:refs/remotes/origin/main'
+```
 
 Runtime state is stored in the target repo's Git directory:
 
