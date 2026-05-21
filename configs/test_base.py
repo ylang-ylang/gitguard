@@ -159,6 +159,16 @@ class PolicyHookTestBase:
                 f"{self.name}: expected repaired runtime to enforce branch policy\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
+        if "runtime auto-sync updated installed assets" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected runtime auto-sync to print a visible update message\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if ".git-guard/runtime/policy_reference_transaction_hook.py" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected runtime auto-sync message to name the repaired runtime asset\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
         if runtime_path.read_text(encoding="utf-8") != load_runtime_hook_text():
             raise AssertionError(f"{self.name}: runtime auto-sync did not repair installed runtime")
 
@@ -175,6 +185,11 @@ class PolicyHookTestBase:
 
         result = self.git("branch", "forbidden/runtime-auto-sync-disabled", "HEAD", check=False)
         combined = result.stdout + result.stderr
+        if "runtime auto-sync updated installed assets" in combined:
+            raise AssertionError(
+                f"{self.name}: disabled runtime auto-sync should not print an update message\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
         if "BRANCH_NAME_NOT_ALLOWED" in combined:
             raise AssertionError(
                 f"{self.name}: runtime auto-sync ran even though config disabled it\n"
