@@ -21,7 +21,19 @@ uv tool install --editable .
 git-guard --help
 ```
 
-`uv tool install` creates a uv-managed tool environment. It is not a system Python install.
+`uv tool install` creates a uv-managed tool environment. It is not a system Python install. When switching the global `git-guard` command to a different checkout or worktree, reinstall the editable tool from that checkout:
+
+```bash
+uv tool install --editable . --force
+```
+
+The command path, such as `~/.local/bin/git-guard`, usually stays the same; the important part is which editable checkout the uv tool points at. The project version may not distinguish local worktrees, so confirm a runtime-sync capable install by checking generated hooks:
+
+```bash
+rg git_guard_runtime_sync .git-guard/hooks
+```
+
+For one-off development checks against the current checkout, prefer `PYTHONPATH=src python -m cli ...` so PATH cannot accidentally use an older uv tool.
 
 Do not run a bare system-level `pip install -e .`. If you choose to use pip manually, activate a project-local virtual environment first:
 
