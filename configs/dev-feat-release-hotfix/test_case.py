@@ -74,9 +74,12 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
     def create_feature_flow(self) -> None:
         branch = "feat/export"
         self.create_branch(branch, "dev")
-        sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
+        feature_sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
+        dev_sha = self.commit_file("dev", "dev-during-feature.txt", "dev during feature\n", "dev advances during feature work")
+        self.merge_to("dev", branch)
         self.merge_to(branch, "dev")
-        self.assert_is_ancestor(sha, "dev")
+        self.assert_is_ancestor(feature_sha, "dev")
+        self.assert_is_ancestor(dev_sha, branch)
 
     def create_release_flow(self) -> None:
         branch = "release/1.1"

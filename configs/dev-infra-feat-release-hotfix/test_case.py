@@ -36,6 +36,8 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.create_feat_reject_to_main_fixture()
         self.create_release_reject_main_before_dev_fixture()
         self.create_old_release_fixture()
+        self.create_stale_infra_fixture()
+        self.create_stale_feat_fixture()
 
     def mark_rejection_tests_start(self) -> None:
         branch = "feat/rejection-boundary"
@@ -62,6 +64,20 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
             cleanup=self.cleanup_merge_state,
         )
 
+        self.git("checkout", "dev")
+        self.expect_rejected(
+            ["merge", "--no-ff", "--no-edit", "infra/stale"],
+            "MERGE_SOURCE_BEHIND_TARGET",
+            cleanup=self.cleanup_merge_state,
+        )
+
+        self.git("checkout", "dev")
+        self.expect_rejected(
+            ["merge", "--no-ff", "--no-edit", "feat/stale"],
+            "MERGE_SOURCE_BEHIND_TARGET",
+            cleanup=self.cleanup_merge_state,
+        )
+
         self.expect_rejected(["tag", "release-1.0.0", "main"], "TAG_TARGET_TAG_PATTERN_MISMATCH")
         self.expect_rejected(
             ["tag", "v1.1.2", self.release_main_sha],
@@ -83,16 +99,24 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
     def create_infra_flow(self) -> None:
         branch = "infra/pipeline"
         self.create_branch(branch, "dev")
-        sha = self.commit_file(branch, "infra.txt", "infra\n", "infra work")
+        infra_sha = self.commit_file(branch, "infra.txt", "infra\n", "infra work")
+        dev_sha = self.commit_file("dev", "dev-during-infra.txt", "dev during infra\n", "dev advances during infra work")
+        self.merge_to("dev", branch)
+        validation_sha = self.commit_file(branch, "infra-validation.txt", "infra validation\n", "infra validation")
         self.merge_to(branch, "dev")
-        self.assert_is_ancestor(sha, "dev")
+        self.assert_is_ancestor(infra_sha, "dev")
+        self.assert_is_ancestor(dev_sha, branch)
+        self.assert_is_ancestor(validation_sha, "dev")
 
     def create_feature_flow(self) -> None:
         branch = "feat/export"
         self.create_branch(branch, "dev")
-        sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
+        feature_sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
+        dev_sha = self.commit_file("dev", "dev-during-feature.txt", "dev during feature\n", "dev advances during feature work")
+        self.merge_to("dev", branch)
         self.merge_to(branch, "dev")
-        self.assert_is_ancestor(sha, "dev")
+        self.assert_is_ancestor(feature_sha, "dev")
+        self.assert_is_ancestor(dev_sha, branch)
 
     def create_release_flow(self) -> None:
         branch = "release/1.1"
@@ -144,6 +168,18 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.merge_to(branch, "main")
         self.old_release_main_sha = self.rev_parse("main")
         self.tag("v1.2.0", self.old_release_main_sha)
+
+    def create_stale_infra_fixture(self) -> None:
+        branch = "infra/stale"
+        self.create_branch(branch, "dev")
+        self.commit_file(branch, "infra-stale.txt", "infra stale\n", "fixture stale infra")
+        self.commit_file("dev", "dev-after-stale-infra.txt", "dev after stale infra\n", "advance dev after stale infra")
+
+    def create_stale_feat_fixture(self) -> None:
+        branch = "feat/stale"
+        self.create_branch(branch, "dev")
+        self.commit_file(branch, "feature-stale.txt", "feature stale\n", "fixture stale feat")
+        self.commit_file("dev", "dev-after-stale-feature.txt", "dev after stale feature\n", "advance dev after stale feature")
 
     def assert_hotfix_wrong_line_rejected(self) -> None:
         branch = "hotfix/wrong-line-reject"

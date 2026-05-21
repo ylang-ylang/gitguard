@@ -431,7 +431,7 @@ def maximal_branch_heads(repo: Path, heads: list[tuple[str, str]]) -> list[tuple
 
 def merge_rule_allows_source(policy: dict[str, Any], source_ref: str, target_ref: str) -> bool:
     for rule in policy.get("merge_rules", []):
-        if rule.get("target_ref") == target_ref and re.match(rule["source_ref_regex"], source_ref):
+        if rule_targets_ref(rule, target_ref) and re.match(rule["source_ref_regex"], source_ref):
             return True
     return False
 
@@ -463,6 +463,8 @@ def validate_protected_target_update(
         )
 
     candidate = candidates[0]
+    enforce_source_freshness(repo, candidate, update)
+
     required = required_target_refs(policy, candidate.rule["source"])
     if len(required) <= 1:
         return
@@ -493,13 +495,34 @@ def direct_commit_allowed(repo: Path, policy: dict[str, Any], update: RefUpdate)
 def source_candidates_for_target(repo: Path, policy: dict[str, Any], update: RefUpdate) -> list[SourceCandidate]:
     candidates: list[SourceCandidate] = []
     for rule in policy.get("merge_rules", []):
-        if rule.get("target_ref") != update.ref:
+        if not rule_targets_ref(rule, update.ref):
             continue
         for ref in refs_matching(repo, rule["source_ref_regex"]):
             sha = rev_parse(repo, ref)
             if is_ancestor(repo, sha, update.new) and not is_ancestor(repo, sha, update.old):
                 candidates.append(SourceCandidate(ref=ref, sha=sha, rule=rule))
     return maximal_source_candidates(repo, candidates)
+
+
+def rule_targets_ref(rule: dict[str, Any], ref: str) -> bool:
+    target_ref_regex = rule.get("target_ref_regex")
+    if isinstance(target_ref_regex, str) and re.match(target_ref_regex, ref):
+        return True
+    return rule.get("target_ref") == ref
+
+
+def enforce_source_freshness(repo: Path, candidate: SourceCandidate, update: RefUpdate) -> None:
+    if not candidate.rule.get("source_must_contain_target"):
+        return
+    if is_ancestor(repo, update.old, candidate.sha):
+        return
+    raise HookReject(
+        "MERGE_SOURCE_BEHIND_TARGET",
+        source_ref=candidate.ref,
+        source=short_sha(candidate.sha),
+        target_ref=update.ref,
+        target=short_sha(update.old),
+    )
 
 
 def maximal_source_candidates(repo: Path, candidates: list[SourceCandidate]) -> list[SourceCandidate]:
