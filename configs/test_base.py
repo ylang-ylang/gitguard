@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Callable, ClassVar
 
 from install import install as install_policy_hook
+from install import load_runtime_hook_text
 from mermaid import load_policy_from_markdown
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FINISH_SYMBOL = "========test finished========"
 UNEXPECTED_ACCEPTANCE_SYMBOL = "!!!!!!!! GIT GUARD EXPECTED REJECTION WAS ACCEPTED !!!!!!!!"
 EXPECTED_AGENT_HINT = "if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook."
@@ -104,6 +106,17 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: config should enable linked worktree branch creation guard by default")
         if config.get("pre_push", {}).get("auto_push_missing_tags") is not True:
             raise AssertionError(f"{self.name}: config should enable missing tag auto-push by default")
+        if config.get("runtime", {}).get("auto_sync") is not True:
+            raise AssertionError(f"{self.name}: config should enable runtime auto-sync by default")
+        for hook_name in ["reference-transaction", "pre-push"]:
+            hook_text = (self.repo / ".git-guard" / "hooks" / hook_name).read_text(encoding="utf-8")
+            if "git_guard_runtime_sync" not in hook_text:
+                raise AssertionError(f"{self.name}: {hook_name} hook should include runtime auto-sync")
+            if "GIT_GUARD_BIN" not in hook_text:
+                raise AssertionError(f"{self.name}: {hook_name} hook should support GIT_GUARD_BIN")
+        self.assert_install_is_idempotent_and_preserves_config()
+        self.assert_runtime_auto_sync_repairs_installed_runtime()
+        self.assert_runtime_auto_sync_can_be_disabled()
         self.git_no_hooks("config", "--worktree", "--unset", "core.hooksPath", check=False)
         self.git_no_hooks("config", "--local", "--unset", "core.hooksPath", check=False)
         result = self.run_command([".git-guard/enable.sh"], check=True)
@@ -115,6 +128,65 @@ class PolicyHookTestBase:
         worktree_hook_path = self.git_no_hooks("config", "--worktree", "--get", "core.hooksPath", check=False)
         if worktree_hook_path.returncode == 0:
             raise AssertionError(f"{self.name}: enable.sh should not set worktree hooksPath: {worktree_hook_path.stdout.strip()}")
+
+    def assert_install_is_idempotent_and_preserves_config(self) -> None:
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config.setdefault("runtime", {})["auto_sync"] = False
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        install_policy_hook(self.repo, self.repo / ".git-guard" / "contribution.md", scope="worktree")
+        updated = json.loads(config_path.read_text(encoding="utf-8"))
+        if updated.get("runtime", {}).get("auto_sync") is not False:
+            raise AssertionError(f"{self.name}: reinstall should preserve runtime.auto_sync=false")
+        if updated.get("pre_push", {}).get("auto_push_missing_tags") is not True:
+            raise AssertionError(f"{self.name}: reinstall should preserve/add pre_push defaults")
+        if updated.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
+            raise AssertionError(f"{self.name}: reinstall should preserve/add worktree defaults")
+
+        config.setdefault("runtime", {})["auto_sync"] = True
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def assert_runtime_auto_sync_repairs_installed_runtime(self) -> None:
+        runtime_path = self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py"
+        runtime_path.write_text("#!/usr/bin/env python3\n# stale runtime sentinel\n", encoding="utf-8")
+        runtime_path.chmod(0o755)
+
+        result = self.git("branch", "forbidden/runtime-auto-sync", "HEAD", check=False)
+        combined = result.stdout + result.stderr
+        if "BRANCH_NAME_NOT_ALLOWED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected repaired runtime to enforce branch policy\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if runtime_path.read_text(encoding="utf-8") != load_runtime_hook_text():
+            raise AssertionError(f"{self.name}: runtime auto-sync did not repair installed runtime")
+
+    def assert_runtime_auto_sync_can_be_disabled(self) -> None:
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config.setdefault("runtime", {})["auto_sync"] = False
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        runtime_path = self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py"
+        stale_runtime = "#!/usr/bin/env python3\n# stale runtime sentinel disabled\n"
+        runtime_path.write_text(stale_runtime, encoding="utf-8")
+        runtime_path.chmod(0o755)
+
+        result = self.git("branch", "forbidden/runtime-auto-sync-disabled", "HEAD", check=False)
+        combined = result.stdout + result.stderr
+        if "BRANCH_NAME_NOT_ALLOWED" in combined:
+            raise AssertionError(
+                f"{self.name}: runtime auto-sync ran even though config disabled it\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if runtime_path.read_text(encoding="utf-8") != stale_runtime:
+            raise AssertionError(f"{self.name}: disabled runtime auto-sync should not repair runtime")
+        self.git_no_hooks("branch", "-D", "forbidden/runtime-auto-sync-disabled", check=False)
+
+        config.setdefault("runtime", {})["auto_sync"] = True
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        install_policy_hook(self.repo, self.repo / ".git-guard" / "contribution.md", scope="worktree")
 
     def expect_rejected(
         self,
@@ -323,6 +395,9 @@ def run_raw(cwd: Path, args: list[str], check: bool = True) -> CommandResult:
     env.setdefault("GIT_AUTHOR_EMAIL", "policy-hook-test@example.invalid")
     env.setdefault("GIT_COMMITTER_NAME", "Policy Hook Test")
     env.setdefault("GIT_COMMITTER_EMAIL", "policy-hook-test@example.invalid")
+    existing_pythonpath = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(PROJECT_ROOT / "src") if not existing_pythonpath else f"{PROJECT_ROOT / 'src'}{os.pathsep}{existing_pythonpath}"
+    env.setdefault("GIT_GUARD_BIN", "python3 -m cli")
     result = subprocess.run(
         args,
         cwd=str(cwd),

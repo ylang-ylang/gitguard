@@ -16,6 +16,9 @@ DEFAULT_CONFIG = {
     "pre_push": {
         "auto_push_missing_tags": True,
     },
+    "runtime": {
+        "auto_sync": True,
+    },
     "worktree": {
         "reject_branch_creation_in_linked_worktree": True,
     },
