@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -114,36 +116,59 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
     runtime_dir = repo / ".git-guard" / "runtime"
     hook_dir.mkdir(parents=True, exist_ok=True)
     runtime_dir.mkdir(parents=True, exist_ok=True)
+    changes: list[str] = []
 
     installed_contribution_path = install_dir / "contribution.md"
-    copy_file_if_different(contribution_path, installed_contribution_path)
+    record_change(
+        changes,
+        ".git-guard/contribution.md",
+        copy_file_if_different(contribution_path, installed_contribution_path),
+    )
     policy_source = policy.setdefault("source", {})
     policy_source["path"] = installed_contribution_path.relative_to(repo).as_posix()
     policy_source.pop("original_path", None)
 
     runtime_runner = runtime_dir / "policy_reference_transaction_hook.py"
     if runner_path:
-        copy_file_if_different(runner_path, runtime_runner, mode=0o755)
+        changed = copy_file_if_different(runner_path, runtime_runner, mode=0o755)
     else:
-        write_text_if_different(runtime_runner, load_runtime_hook_text(), mode=0o755)
+        changed = write_text_if_different(runtime_runner, load_runtime_hook_text(), mode=0o755)
+    record_change(changes, ".git-guard/runtime/policy_reference_transaction_hook.py", changed)
 
     policy_path = install_dir / "policy.json"
     config_path = install_dir / "config.json"
     state_path = git_dir / "git-guard-state.json"
     log_path = git_dir / "git-guard-hook.log"
-    write_text_if_different(policy_path, json.dumps(policy, indent=2, sort_keys=True) + "\n")
-    ensure_config_defaults(config_path)
+    record_change(
+        changes,
+        ".git-guard/policy.json",
+        write_text_if_different(policy_path, json.dumps(policy, indent=2, sort_keys=True) + "\n"),
+    )
+    record_change(changes, ".git-guard/config.json", ensure_config_defaults(config_path))
 
     hook_path = hook_dir / "reference-transaction"
-    write_text_if_different(hook_path, reference_transaction_hook(), mode=0o755)
+    record_change(
+        changes,
+        ".git-guard/hooks/reference-transaction",
+        write_text_if_different(hook_path, reference_transaction_hook(), mode=0o755),
+    )
 
     pre_push_path = hook_dir / "pre-push"
-    write_text_if_different(pre_push_path, pre_push_hook(), mode=0o755)
+    record_change(
+        changes,
+        ".git-guard/hooks/pre-push",
+        write_text_if_different(pre_push_path, pre_push_hook(), mode=0o755),
+    )
 
     enable_path = install_dir / "enable.sh"
-    write_text_if_different(enable_path, enable_script(), mode=0o755)
+    record_change(changes, ".git-guard/enable.sh", write_text_if_different(enable_path, enable_script(), mode=0o755))
 
-    configure_hooks_path(repo, scope)
+    record_change(changes, "core.hooksPath", configure_hooks_path(repo, scope))
+
+    if os.environ.get("GG_RUNTIME_SYNC_ACTIVE") == "1":
+        report_runtime_auto_sync(changes)
+        return
+
     print(f"installed git-guard hook into {repo}")
     print(f"scope={scope}")
     print("core.hooksPath=.git-guard/hooks")
@@ -155,14 +180,27 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
     print(f"enable={enable_path}")
 
 
+def record_change(changes: list[str], label: str, changed: bool) -> None:
+    if changed:
+        changes.append(label)
+
+
+def report_runtime_auto_sync(changes: list[str]) -> None:
+    if not changes:
+        return
+    print(
+        "git-guard: runtime auto-sync updated installed assets: " + ", ".join(changes),
+        file=sys.stderr,
+    )
+
+
 def default_config_text() -> str:
     return json.dumps(DEFAULT_CONFIG, indent=2, sort_keys=True) + "\n"
 
 
-def ensure_config_defaults(path: Path) -> None:
+def ensure_config_defaults(path: Path) -> bool:
     if not path.exists():
-        write_text_if_different(path, default_config_text())
-        return
+        return write_text_if_different(path, default_config_text())
 
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
@@ -176,7 +214,8 @@ def ensure_config_defaults(path: Path) -> None:
 
     merged = merge_defaults(config, DEFAULT_CONFIG)
     if merged != config:
-        write_text_if_different(path, json.dumps(merged, indent=2, sort_keys=True) + "\n")
+        return write_text_if_different(path, json.dumps(merged, indent=2, sort_keys=True) + "\n")
+    return False
 
 
 def merge_defaults(config: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
@@ -272,6 +311,7 @@ def enable_script() -> str:
             "set -eu",
             'repo_root="$(git rev-parse --show-toplevel)"',
             'cd "$repo_root"',
+            "git config --worktree --unset core.hooksPath >/dev/null 2>&1 || true",
             "git config --local core.hooksPath .git-guard/hooks",
             'printf "%s\\n" "enabled git-guard hooks for repository $repo_root"',
             'printf "%s\\n" "core.hooksPath=.git-guard/hooks"',
@@ -280,27 +320,39 @@ def enable_script() -> str:
     )
 
 
-def configure_hooks_path(repo: Path, scope: str) -> None:
+def configure_hooks_path(repo: Path, scope: str) -> bool:
     args = ["config"]
+    changed = False
     if scope == "worktree":
-        ensure_worktree_config(repo)
+        changed = ensure_worktree_config(repo)
         args.append("--worktree")
     elif scope == "local":
+        changed = unset_worktree_hooks_path(repo)
         args.append("--local")
     elif scope == "global":
         args.append("--global")
     current = git(repo, *args, "--get", "core.hooksPath", check=False)
     if current.returncode == 0 and current.stdout.strip() == ".git-guard/hooks":
-        return
+        return changed
     args.extend(["core.hooksPath", ".git-guard/hooks"])
     git(repo, *args)
+    return True
 
 
-def ensure_worktree_config(repo: Path) -> None:
+def unset_worktree_hooks_path(repo: Path) -> bool:
+    current = git(repo, "config", "--worktree", "--get", "core.hooksPath", check=False)
+    if current.returncode != 0:
+        return False
+    git(repo, "config", "--worktree", "--unset", "core.hooksPath")
+    return True
+
+
+def ensure_worktree_config(repo: Path) -> bool:
     current = git(repo, "config", "--local", "--get", "extensions.worktreeConfig", check=False)
     if current.returncode == 0 and current.stdout.strip() == "true":
-        return
+        return False
     git(repo, "config", "extensions.worktreeConfig", "true")
+    return True
 
 
 def resolve_config(config: str | Path) -> Path:
@@ -327,31 +379,31 @@ def load_runtime_hook_text() -> str:
     return (Path(__file__).resolve().parent / "runtime" / "reference_transaction_hook.py").read_text(encoding="utf-8")
 
 
-def copy_file_if_different(source: Path, target: Path, mode: int | None = None) -> None:
+def copy_file_if_different(source: Path, target: Path, mode: int | None = None) -> bool:
     source = source.resolve()
     target = target.resolve()
     if source == target:
         if mode is not None:
-            ensure_mode(target, mode)
-        return
+            return ensure_mode(target, mode)
+        return False
 
     try:
         content = source.read_bytes()
     except OSError as exc:
         raise InstallError(f"cannot read source file: {source}\n{exc}") from exc
-    write_bytes_if_different(target, content, mode=mode)
+    return write_bytes_if_different(target, content, mode=mode)
 
 
-def write_text_if_different(path: Path, content: str, mode: int | None = None) -> None:
-    write_bytes_if_different(path, content.encode("utf-8"), mode=mode)
+def write_text_if_different(path: Path, content: str, mode: int | None = None) -> bool:
+    return write_bytes_if_different(path, content.encode("utf-8"), mode=mode)
 
 
-def write_bytes_if_different(path: Path, content: bytes, mode: int | None = None) -> None:
+def write_bytes_if_different(path: Path, content: bytes, mode: int | None = None) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     current = read_bytes_or_none(path)
     current_mode_matches = mode is None or (path.exists() and (path.stat().st_mode & 0o777) == mode)
     if current == content and current_mode_matches:
-        return
+        return False
 
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     temp_path = Path(temp_name)
@@ -366,6 +418,7 @@ def write_bytes_if_different(path: Path, content: bytes, mode: int | None = None
     except OSError as exc:
         temp_path.unlink(missing_ok=True)
         raise InstallError(f"cannot write file: {path}\n{exc}") from exc
+    return True
 
 
 def read_bytes_or_none(path: Path) -> bytes | None:
@@ -377,9 +430,11 @@ def read_bytes_or_none(path: Path) -> bytes | None:
         raise InstallError(f"cannot read file: {path}\n{exc}") from exc
 
 
-def ensure_mode(path: Path, mode: int) -> None:
+def ensure_mode(path: Path, mode: int) -> bool:
     if (path.stat().st_mode & 0o777) != mode:
         path.chmod(mode)
+        return True
+    return False
 
 
 def resolved_git_dir(repo: Path) -> Path:

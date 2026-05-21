@@ -11,6 +11,13 @@ gitGraph TB:
     branch "feat/*"
     checkout "feat/*"
     commit id:"feature work"
+
+    checkout dev
+    commit id:"dev advances during feature work"
+
+    checkout "feat/*"
+    merge dev id:"dev to feat/* sync"
+
     checkout dev
     merge "feat/*" id:"feat/* to dev"
 
@@ -36,7 +43,7 @@ gitGraph TB:
 
 ## Rules
 
-- `feat/*` branches from `dev` and merges to `dev`.
+- `feat/*` branches from `dev`, must absorb the current `dev`, and merges to `dev`.
 - `release/*` branches from `dev`, must merge to `dev`, then merge to `main`; the `main` merge result must be tagged with `v#.#.0`.
 - `hotfix/*` branches from `main`, must merge to `dev`, then merge to `main`; the `main` merge result must be tagged with `v=.=.#`.
 - `#` in tag patterns means one or more decimal digits.

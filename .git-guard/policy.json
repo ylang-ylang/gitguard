@@ -33,12 +33,24 @@
   ],
   "merge_rules": [
     {
+      "id": "dev to feat/*",
+      "source": "dev",
+      "source_ref": "refs/heads/dev",
+      "source_ref_regex": "^refs/heads/dev$",
+      "sync": true,
+      "target": "feat/*",
+      "target_ref": "refs/heads/feat/*",
+      "target_ref_regex": "^refs/heads/feat/.+$"
+    },
+    {
       "id": "feat/* to dev",
       "source": "feat/*",
+      "source_must_contain_target": true,
       "source_ref": "refs/heads/feat/*",
       "source_ref_regex": "^refs/heads/feat/.+$",
       "target": "dev",
-      "target_ref": "refs/heads/dev"
+      "target_ref": "refs/heads/dev",
+      "target_ref_regex": "^refs/heads/dev$"
     },
     {
       "id": "dev to main",
@@ -54,7 +66,8 @@
         "#"
       ],
       "target": "main",
-      "target_ref": "refs/heads/main"
+      "target_ref": "refs/heads/main",
+      "target_ref_regex": "^refs/heads/main$"
     }
   ],
   "protected_refs": [
