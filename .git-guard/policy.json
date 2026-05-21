@@ -101,7 +101,8 @@
         "#",
         "#"
       ],
-      "target": "main"
+      "target": "main",
+      "target_ref": "refs/heads/main"
     }
   ],
   "version": 1

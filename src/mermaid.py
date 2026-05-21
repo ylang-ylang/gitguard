@@ -181,6 +181,7 @@ def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
                 {
                     "source": rule.source,
                     "target": rule.target,
+                    "target_ref": ref_pattern(rule.target),
                     "tag_pattern": rule.tag,
                     "tag_required": rule.tag_required,
                     "tag_tokens": tag_tokens(rule.tag),
