@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import subprocess
+import tempfile
 from pathlib import Path
+from typing import Any
 
 from mermaid import PolicyParseError, load_policy_from_markdown
 
@@ -15,6 +16,9 @@ VALID_SCOPES = ("worktree", "local", "global")
 DEFAULT_CONFIG = {
     "pre_push": {
         "auto_push_missing_tags": True,
+    },
+    "runtime": {
+        "auto_sync": True,
     },
     "worktree": {
         "reject_branch_creation_in_linked_worktree": True,
@@ -112,37 +116,32 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
     runtime_dir.mkdir(parents=True, exist_ok=True)
 
     installed_contribution_path = install_dir / "contribution.md"
-    shutil.copyfile(contribution_path, installed_contribution_path)
+    copy_file_if_different(contribution_path, installed_contribution_path)
     policy_source = policy.setdefault("source", {})
     policy_source["path"] = installed_contribution_path.relative_to(repo).as_posix()
     policy_source.pop("original_path", None)
 
     runtime_runner = runtime_dir / "policy_reference_transaction_hook.py"
     if runner_path:
-        shutil.copyfile(runner_path, runtime_runner)
+        copy_file_if_different(runner_path, runtime_runner, mode=0o755)
     else:
-        runtime_runner.write_text(load_runtime_hook_text(), encoding="utf-8")
-    runtime_runner.chmod(0o755)
+        write_text_if_different(runtime_runner, load_runtime_hook_text(), mode=0o755)
 
     policy_path = install_dir / "policy.json"
     config_path = install_dir / "config.json"
     state_path = git_dir / "git-guard-state.json"
     log_path = git_dir / "git-guard-hook.log"
-    policy_path.write_text(json.dumps(policy, indent=2, sort_keys=True), encoding="utf-8")
-    if not config_path.exists():
-        config_path.write_text(default_config_text(), encoding="utf-8")
+    write_text_if_different(policy_path, json.dumps(policy, indent=2, sort_keys=True) + "\n")
+    ensure_config_defaults(config_path)
 
     hook_path = hook_dir / "reference-transaction"
-    hook_path.write_text(reference_transaction_hook(), encoding="utf-8")
-    hook_path.chmod(0o755)
+    write_text_if_different(hook_path, reference_transaction_hook(), mode=0o755)
 
     pre_push_path = hook_dir / "pre-push"
-    pre_push_path.write_text(pre_push_hook(), encoding="utf-8")
-    pre_push_path.chmod(0o755)
+    write_text_if_different(pre_push_path, pre_push_hook(), mode=0o755)
 
     enable_path = install_dir / "enable.sh"
-    enable_path.write_text(enable_script(), encoding="utf-8")
-    enable_path.chmod(0o755)
+    write_text_if_different(enable_path, enable_script(), mode=0o755)
 
     configure_hooks_path(repo, scope)
     print(f"installed git-guard hook into {repo}")
@@ -158,6 +157,37 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
 
 def default_config_text() -> str:
     return json.dumps(DEFAULT_CONFIG, indent=2, sort_keys=True) + "\n"
+
+
+def ensure_config_defaults(path: Path) -> None:
+    if not path.exists():
+        write_text_if_different(path, default_config_text())
+        return
+
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise InstallError(f"config is not valid JSON: {path}\n{exc}") from exc
+    except OSError as exc:
+        raise InstallError(f"cannot read config: {path}\n{exc}") from exc
+
+    if not isinstance(config, dict):
+        raise InstallError(f"config must be a JSON object: {path}")
+
+    merged = merge_defaults(config, DEFAULT_CONFIG)
+    if merged != config:
+        write_text_if_different(path, json.dumps(merged, indent=2, sort_keys=True) + "\n")
+
+
+def merge_defaults(config: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(config)
+    for key, default_value in defaults.items():
+        current_value = merged.get(key)
+        if isinstance(current_value, dict) and isinstance(default_value, dict):
+            merged[key] = merge_defaults(current_value, default_value)
+        elif key not in merged:
+            merged[key] = dict(default_value) if isinstance(default_value, dict) else default_value
+    return merged
 
 
 def reference_transaction_hook() -> str:
@@ -177,11 +207,36 @@ def reference_transaction_hook() -> str:
             'export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
             'export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
             'runtime="$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py"',
+            *runtime_sync_shell_function(),
+            'if [ "${1:-}" = "prepared" ]; then',
+            "  git_guard_runtime_sync",
+            "fi",
             '[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
             'exec python3 "$runtime" "$@"',
             "",
         ]
     )
+
+
+def runtime_sync_shell_function() -> list[str]:
+    return [
+        "git_guard_runtime_sync() {",
+        '  [ "${GG_RUNTIME_SYNC_ACTIVE:-}" != "1" ] || return 0',
+        '  [ -f "$GG_CONFIG_JSON" ] || return 0',
+        "  python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding=\"utf-8\")); runtime=data.get(\"runtime\", {}); value=runtime.get(\"auto_sync\", True) if isinstance(runtime, dict) else True; sys.exit(0 if value is not False else 1)' \"$GG_CONFIG_JSON\" || return 0",
+        '  git_guard_command="${GIT_GUARD_BIN:-git-guard}"',
+        '  read -r -a git_guard_args <<< "$git_guard_command"',
+        '  command -v "${git_guard_args[0]}" >/dev/null 2>&1 || { printf "%s\\n" "git-guard: runtime auto-sync skipped; git-guard command not found" >&2; return 0; }',
+        '  scope="$(git config --show-scope --get core.hooksPath 2>/dev/null | awk \'NR == 1 { print $1 }\')" || scope=""',
+        '  case "$scope" in',
+        '    worktree|local|global) ;;',
+        '    *) scope="local" ;;',
+        "  esac",
+        '  if ! GG_RUNTIME_SYNC_ACTIVE=1 "${git_guard_args[@]}" install --repo "$repo_root" --config "$repo_root/.git-guard/contribution.md" --scope "$scope" >/dev/null; then',
+        '    printf "%s\\n" "git-guard: runtime auto-sync failed; continuing with installed runtime" >&2',
+        "  fi",
+        "}",
+    ]
 
 
 def pre_push_hook() -> str:
@@ -201,6 +256,8 @@ def pre_push_hook() -> str:
             'export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
             'export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
             'runtime="$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py"',
+            *runtime_sync_shell_function(),
+            "git_guard_runtime_sync",
             '[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
             'exec python3 "$runtime" pre-push "$@"',
             "",
@@ -232,11 +289,17 @@ def configure_hooks_path(repo: Path, scope: str) -> None:
         args.append("--local")
     elif scope == "global":
         args.append("--global")
+    current = git(repo, *args, "--get", "core.hooksPath", check=False)
+    if current.returncode == 0 and current.stdout.strip() == ".git-guard/hooks":
+        return
     args.extend(["core.hooksPath", ".git-guard/hooks"])
     git(repo, *args)
 
 
 def ensure_worktree_config(repo: Path) -> None:
+    current = git(repo, "config", "--local", "--get", "extensions.worktreeConfig", check=False)
+    if current.returncode == 0 and current.stdout.strip() == "true":
+        return
     git(repo, "config", "extensions.worktreeConfig", "true")
 
 
@@ -264,6 +327,61 @@ def load_runtime_hook_text() -> str:
     return (Path(__file__).resolve().parent / "runtime" / "reference_transaction_hook.py").read_text(encoding="utf-8")
 
 
+def copy_file_if_different(source: Path, target: Path, mode: int | None = None) -> None:
+    source = source.resolve()
+    target = target.resolve()
+    if source == target:
+        if mode is not None:
+            ensure_mode(target, mode)
+        return
+
+    try:
+        content = source.read_bytes()
+    except OSError as exc:
+        raise InstallError(f"cannot read source file: {source}\n{exc}") from exc
+    write_bytes_if_different(target, content, mode=mode)
+
+
+def write_text_if_different(path: Path, content: str, mode: int | None = None) -> None:
+    write_bytes_if_different(path, content.encode("utf-8"), mode=mode)
+
+
+def write_bytes_if_different(path: Path, content: bytes, mode: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = read_bytes_or_none(path)
+    current_mode_matches = mode is None or (path.exists() and (path.stat().st_mode & 0o777) == mode)
+    if current == content and current_mode_matches:
+        return
+
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    temp_path = Path(temp_name)
+    try:
+        with open(fd, "wb", closefd=True) as stream:
+            stream.write(content)
+        if mode is not None:
+            temp_path.chmod(mode)
+        else:
+            temp_path.chmod(path.stat().st_mode & 0o777 if path.exists() else 0o644)
+        temp_path.replace(path)
+    except OSError as exc:
+        temp_path.unlink(missing_ok=True)
+        raise InstallError(f"cannot write file: {path}\n{exc}") from exc
+
+
+def read_bytes_or_none(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise InstallError(f"cannot read file: {path}\n{exc}") from exc
+
+
+def ensure_mode(path: Path, mode: int) -> None:
+    if (path.stat().st_mode & 0o777) != mode:
+        path.chmod(mode)
+
+
 def resolved_git_dir(repo: Path) -> Path:
     raw = Path(git(repo, "rev-parse", "--git-dir").stdout.strip())
     if not raw.is_absolute():
@@ -271,7 +389,7 @@ def resolved_git_dir(repo: Path) -> Path:
     return raw.resolve()
 
 
-def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
         text=True,
@@ -279,7 +397,7 @@ def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.PIPE,
         check=False,
     )
-    if result.returncode != 0:
+    if check and result.returncode != 0:
         raise InstallError(f"git {' '.join(args)} failed in {repo}\n{result.stderr.strip()}")
     return result
 
