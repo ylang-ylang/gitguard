@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 import shlex
@@ -24,6 +24,8 @@ class MergeRule:
     label: str
     tag: str | None
     tag_required: bool | None = None
+    sync: bool = False
+    source_must_contain_target: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,7 +117,7 @@ def parse_gitgraph(block: str) -> ParsedGraph:
 
     return ParsedGraph(
         branch_from=branch_from,
-        merge_rules=normalize_merge_rules(merge_rules),
+        merge_rules=normalize_merge_rules(annotate_source_freshness_rules(merge_rules)),
         branches=branches,
         direct_commit_branches=direct_commit_branches,
     )
@@ -125,7 +127,7 @@ def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
     long_lived = [branch for branch in graph.branches if not _is_pattern(branch)]
     families = [branch for branch in graph.branches if _is_pattern(branch)]
     protected_targets = _unique(
-        ref_pattern(rule.target) for rule in graph.merge_rules if not _is_pattern(rule.target)
+        ref_pattern(rule.target) for rule in graph.merge_rules if not rule.sync and not _is_pattern(rule.target)
     )
 
     merge_rules = [
@@ -136,6 +138,9 @@ def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
             "source_ref": ref_pattern(rule.source),
             "source_ref_regex": ref_regex(rule.source),
             "target_ref": ref_pattern(rule.target),
+            "target_ref_regex": ref_regex(rule.target),
+            "sync": True if rule.sync else None,
+            "source_must_contain_target": True if rule.source_must_contain_target else None,
             "tag_pattern": rule.tag,
             "tag_required": rule.tag_required if rule.tag else None,
             "tag_tokens": tag_tokens(rule.tag) if rule.tag else None,
@@ -176,7 +181,7 @@ def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
                 for edge in graph.branch_from
             ],
             "merge_rules": merge_rules,
-            "required_targets": required_targets(graph.merge_rules),
+            "required_targets": required_targets(delivery_merge_rules(graph.merge_rules)),
             "tag_rules": [
                 {
                     "source": rule.source,
@@ -228,6 +233,8 @@ def normalize_merge_rules(rules: list[MergeRule]) -> list[MergeRule]:
                     label=tagged_rule.label,
                     tag=tagged_rule.tag,
                     tag_required=False,
+                    sync=tagged_rule.sync,
+                    source_must_contain_target=tagged_rule.source_must_contain_target,
                 )
             )
             continue
@@ -241,6 +248,8 @@ def normalize_merge_rules(rules: list[MergeRule]) -> list[MergeRule]:
                     label=tagged_rule.label,
                     tag=tagged_rule.tag,
                     tag_required=True,
+                    sync=tagged_rule.sync,
+                    source_must_contain_target=tagged_rule.source_must_contain_target,
                 )
             )
             continue
@@ -248,6 +257,38 @@ def normalize_merge_rules(rules: list[MergeRule]) -> list[MergeRule]:
         normalized.append(untagged[0])
 
     return normalized
+
+
+def annotate_source_freshness_rules(rules: list[MergeRule]) -> list[MergeRule]:
+    sync_rule_indexes: set[int] = set()
+    freshness_rule_indexes: set[int] = set()
+
+    for index, rule in enumerate(rules):
+        if not is_source_freshness_family(rule.source):
+            continue
+        for prior_index in range(index - 1, -1, -1):
+            prior = rules[prior_index]
+            if prior.tag is None and prior.source == rule.target and prior.target == rule.source:
+                sync_rule_indexes.add(prior_index)
+                freshness_rule_indexes.add(index)
+                break
+
+    return [
+        replace(
+            rule,
+            sync=index in sync_rule_indexes,
+            source_must_contain_target=index in freshness_rule_indexes,
+        )
+        for index, rule in enumerate(rules)
+    ]
+
+
+def is_source_freshness_family(source: str) -> bool:
+    return source in {"feat/*", "infra/*"}
+
+
+def delivery_merge_rules(rules: list[MergeRule]) -> list[MergeRule]:
+    return [rule for rule in rules if not rule.sync]
 
 
 def merge_rule_id(source: str, target: str) -> str:

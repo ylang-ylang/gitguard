@@ -11,14 +11,29 @@ gitGraph TB:
     branch "infra/*"
     checkout "infra/*"
     commit id:"infra work"
+
+    checkout dev
+    commit id:"dev advances during infra work"
+
+    checkout "infra/*"
+    merge dev id:"dev to infra/* sync"
     commit id:"infra validation"
+
     checkout dev
     merge "infra/*" id:"infra/* to dev"
 
     %% Single-module feature work
+    checkout dev
     branch "feat/*"
     checkout "feat/*"
     commit id:"feature work"
+
+    checkout dev
+    commit id:"dev advances during feature work"
+
+    checkout "feat/*"
+    merge dev id:"dev to feat/* sync"
+
     checkout dev
     merge "feat/*" id:"feat/* to dev"
 
@@ -46,7 +61,7 @@ gitGraph TB:
 
 ## Rules
 
-- `infra/*` and `feat/*` branch from `dev` and merge to `dev`.
+- `infra/*` and `feat/*` branch from `dev`, must absorb the current `dev`, and merge to `dev`.
 - `release/*` branches from `dev`, must merge to `dev`, then merge to `main`; the `main` merge result must be tagged with `v#.#.0`.
 - `hotfix/*` branches from `main`, must merge to `dev`, then merge to `main`; the `main` merge result must be tagged with `v=.=.#`.
 - `#` in tag patterns means one or more decimal digits.

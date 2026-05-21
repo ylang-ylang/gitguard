@@ -74,6 +74,8 @@ If the same source and target appear once without `tag:"..."` and once with `tag
 
 For tag policies, Git Guard follows the Mermaid merge direction: `checkout TARGET` followed by `merge SOURCE tag:"..."` means the tag must point at the merge result on `TARGET`. For example, `checkout main` then `merge dev tag:"V#.#"` expects `V#.#` to point at the relevant `main` commit, not the `dev` head.
 
+For `feat/*` and `infra/*`, a reverse merge before the normal merge declares a source freshness rule. `checkout "feat/*"` followed by `merge dev` before `checkout dev` and `merge "feat/*"` means feature branches must absorb the current `dev` before they can merge back into `dev`.
+
 Wildcard branch families should be quoted:
 
 ```mermaid
@@ -84,6 +86,10 @@ gitGraph TB:
     branch "feat/*"
     checkout "feat/*"
     commit id:"feature"
+    checkout dev
+    %% dev may advance here through other allowed merges
+    checkout "feat/*"
+    merge dev id:"dev to feat/* sync"
     checkout dev
     merge "feat/*" id:"feat/* to dev"
 ```
@@ -151,7 +157,7 @@ Installed hook wrappers can refresh these Git Guard managed files when a hook fi
 git-guard install --repo <repo> --config <repo>/.git-guard/contribution.md --scope <current-scope>
 ```
 
-This is a local content check, not a network update check. The repo is current when the files that the current local `git-guard install` would generate already match `.git-guard/`; otherwise install rewrites the changed managed files before the runtime hook runs. The repo does not store absolute paths to the Git Guard installation, so two machines with the same protected repo use the `git-guard` available on each machine. Existing installations need one manual reinstall before they have wrappers that can auto-sync themselves.
+This is a local content check, not a network update check. The repo is current when the files that the current local `git-guard install` would generate already match `.git-guard/`; otherwise install rewrites the changed managed files before the runtime hook runs. When runtime auto-sync rewrites anything, the hook prints a visible `git-guard: runtime auto-sync updated installed assets: ...` message naming the updated files. The repo does not store absolute paths to the Git Guard installation, so two machines with the same protected repo use the `git-guard` available on each machine. Existing installations need one manual reinstall before they have wrappers that can auto-sync themselves.
 
 After a protected repository is cloned, users do not need to install this Python package just to enable the checked-in hook. They can run:
 
@@ -196,6 +202,8 @@ For required `merge ... tag:"..."` rules, Git Guard treats the branch merge and 
 Optional tag rules do not create pending tag requirements. If a matching tag is created later, the hook still validates its name, version order, target branch history, and immutability.
 
 Policy-managed branches cannot be moved to include another managed branch head unless the Mermaid graph declares that merge direction. This is independent of merge strategy: normal allowed merges may be fast-forward or `--no-ff`. For example, if the graph has `dev to main` but no `main to dev`, `git branch -f dev main` is rejected even when the underlying ref move is a fast-forward.
+
+If a `feat/*` or `infra/*` rule has a prior reverse sync merge in the Mermaid graph, the protected target merge also checks that the source contains the target's current old head. A stale source branch is rejected with `MERGE_SOURCE_BEHIND_TARGET`; merge the target branch into the source branch and resolve conflicts there before merging back.
 
 Linked worktrees cannot create new local branches while the hook is enabled. A linked worktree is detected when `git rev-parse --git-dir` and `git rev-parse --git-common-dir` resolve to different directories. In that case, `git branch new-name`, `git switch -c new-name`, and other branch-creation ref transactions are rejected with `WORKTREE_BRANCH_CREATION_NOT_ALLOWED`. Create the new branch from the main worktree and give it its own worktree directory instead.
 

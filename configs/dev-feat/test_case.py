@@ -82,12 +82,20 @@ class DevFeatHookTest(PolicyHookTestBase):
         branch = "feat/initial"
         self.create_branch(branch, "dev")
         self.feature_sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
+
+        advance_branch = "feat/dev-advance"
+        self.create_branch(advance_branch, "dev")
+        dev_advance_sha = self.commit_file(advance_branch, "dev-advance.txt", "dev advance\n", "advance dev through feature")
+        self.merge_to(advance_branch, "dev")
+
+        self.merge_to("dev", branch)
         self.merge_to(branch, "dev")
         self.dev_release_sha = self.rev_parse("dev")
         self.merge_to("dev", "main")
         self.main_release_sha = self.rev_parse("main")
         self.tag("V1.0", self.main_release_sha)
         self.assert_is_ancestor(self.feature_sha, "dev")
+        self.assert_is_ancestor(dev_advance_sha, branch)
         self.assert_is_ancestor(self.dev_release_sha, "main")
         self.assert_pending_tag_count(0)
 
