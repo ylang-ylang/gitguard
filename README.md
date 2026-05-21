@@ -54,11 +54,13 @@ Git Guard intentionally supports a small Mermaid subset:
 - `branch NAME`: records a branch-from edge from the current checkout.
 - `checkout NAME`: changes the current target context.
 - `merge NAME id:"unique display label"`: records a merge rule into the current checkout.
-- `merge NAME id:"unique display label" tag:"..."`: records a merge rule plus a tag policy.
+- `merge NAME id:"unique display label" tag:"..."`: records a merge rule plus a tag policy for the merge result on the current checkout target.
 
 Mermaid `id` values are commit ids and must be unique within the graph. Git Guard derives the policy rule id from the merge source and current checkout target, for example `dev to main`.
 
 If the same source and target appear once without `tag:"..."` and once with `tag:"..."`, Git Guard treats the tag as optional: the merge is allowed without a tag, but any matching tag is still validated.
+
+For tag policies, Git Guard follows the Mermaid merge direction: `checkout TARGET` followed by `merge SOURCE tag:"..."` means the tag must point at the merge result on `TARGET`. For example, `checkout main` then `merge dev tag:"V#.#"` expects `V#.#` to point at the relevant `main` commit, not the `dev` head.
 
 Wildcard branch families should be quoted:
 
@@ -156,7 +158,7 @@ When a Git operation is rejected, the hook prints a `see policy:` hint pointing 
 Rejection reasons use a stable `CODE key=value` format, for example:
 
 ```text
-git-guard: TAG_REQUIRED_TARGETS_MISSING tag=refs/tags/v1.2.0 target=abc123 missing=refs/heads/main
+git-guard: TAG_TARGET_NOT_TARGET_HEAD tag=refs/tags/v1.2.0 target=abc123 target_ref=refs/heads/main
 git-guard: see policy: <repo>/.git-guard/contribution.md
 git-guard: agent guidance: if you are an agent, read the contribution document and use the configured workflow; do not try to bypass this hook.
 ```
@@ -177,9 +179,9 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
 }
 ```
 
-For required `merge ... tag:"..."` rules, Git Guard treats the branch merge and tag creation as separate Git ref transactions. The merge may complete first, then the hook records a pending tag requirement. Until the matching tag is created, the same tagged merge rule is blocked with `PENDING_TAG_REQUIRED`, and the already-merged source ref is locked with `PENDING_TAG_SOURCE_MOVED`. Other allowed merge rules, such as `dev to main`, are not blocked by that pending release tag.
+For required `merge ... tag:"..."` rules, Git Guard treats the branch merge and tag creation as separate Git ref transactions. The merge may complete first, then the hook records a pending tag requirement for the target merge result. Until the matching tag is created, that target ref is locked with `PENDING_TAG_TARGET_MOVED`. Other refs, including the source branch, are not blocked by that pending release tag.
 
-Optional tag rules do not create pending tag requirements. If a matching tag is created later, the hook still validates its name, version order, target branch containment, and immutability.
+Optional tag rules do not create pending tag requirements. If a matching tag is created later, the hook still validates its name, version order, target branch history, and immutability.
 
 Policy-managed branches cannot be moved to include another managed branch head unless the Mermaid graph declares that merge direction. This is independent of merge strategy: normal allowed merges may be fast-forward or `--no-ff`. For example, if the graph has `dev to main` but no `main to dev`, `git branch -f dev main` is rejected even when the underlying ref move is a fast-forward.
 
