@@ -324,7 +324,7 @@ class PolicyHookTestBase:
                 f"{self.name}: expected linked worktree branch creation rejection\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
-        if "create a new worktree directory" not in combined:
+        if "blocked only in this linked worktree" not in combined:
             raise AssertionError(
                 f"{self.name}: expected linked worktree rejection guidance\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"

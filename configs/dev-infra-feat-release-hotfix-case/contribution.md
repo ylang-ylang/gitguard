@@ -23,8 +23,8 @@ gitGraph TB:
     commit id:"dev branch infra sync point"
 
     checkout "infra/*"
-    merge dev id:"dev to infra/* sync"
     commit id:"infra validation"
+    merge dev id:"dev to infra/* sync"
 
     checkout dev
     merge "infra/*" id:"infra/* to dev"

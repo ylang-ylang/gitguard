@@ -25,7 +25,7 @@ class MergeRule:
     tag: str | None
     tag_required: bool | None = None
     sync: bool = False
-    source_must_contain_target: bool = False
+    sync_merge_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,7 @@ def parse_gitgraph(block: str) -> ParsedGraph:
     branch_from: list[BranchFrom] = []
     merge_rules: list[MergeRule] = []
     direct_commit_branches: list[str] = []
+    previous_merge_rule_index: int | None = None
 
     for line_number, raw_line in enumerate(block.splitlines(), start=1):
         line = raw_line.strip()
@@ -86,12 +87,14 @@ def parse_gitgraph(block: str) -> ParsedGraph:
                 and not is_branch_history_marker_commit(attrs.get("id", ""))
             ):
                 _append_unique(direct_commit_branches, current_branch)
+            previous_merge_rule_index = None
             continue
         if command == "branch":
             _require_args(tokens, 2, line_number)
             target = tokens[1]
             branch_from.append(BranchFrom(source=current_branch, target=target))
             _append_unique(branches, target)
+            previous_merge_rule_index = None
             continue
         if command == "checkout":
             _require_args(tokens, 2, line_number)
@@ -106,14 +109,19 @@ def parse_gitgraph(block: str) -> ParsedGraph:
             label = attrs.get("id")
             if not label:
                 raise PolicyParseError(f'Line {line_number}: merge "{source}" is missing id:"...".')
-            merge_rules.append(
-                MergeRule(
-                    source=source,
-                    target=current_branch,
-                    label=merge_rule_id(source, current_branch),
-                    tag=attrs.get("tag"),
-                )
+            rule = MergeRule(
+                source=source,
+                target=current_branch,
+                label=merge_rule_id(source, current_branch),
+                tag=attrs.get("tag"),
             )
+            if previous_merge_rule_index is not None and is_sync_merge_required_family(rule.source):
+                previous = merge_rules[previous_merge_rule_index]
+                if previous.tag is None and previous.source == rule.target and previous.target == rule.source:
+                    merge_rules[previous_merge_rule_index] = replace(previous, sync=True)
+                    rule = replace(rule, sync_merge_required=True)
+            merge_rules.append(rule)
+            previous_merge_rule_index = len(merge_rules) - 1
             _append_unique(branches, source)
             _append_unique(branches, current_branch)
             continue
@@ -122,7 +130,7 @@ def parse_gitgraph(block: str) -> ParsedGraph:
 
     return ParsedGraph(
         branch_from=branch_from,
-        merge_rules=normalize_merge_rules(annotate_source_freshness_rules(merge_rules)),
+        merge_rules=normalize_merge_rules(merge_rules),
         branches=branches,
         direct_commit_branches=direct_commit_branches,
     )
@@ -145,7 +153,7 @@ def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
             "target_ref": ref_pattern(rule.target),
             "target_ref_regex": ref_regex(rule.target),
             "sync": True if rule.sync else None,
-            "source_must_contain_target": True if rule.source_must_contain_target else None,
+            "sync_merge_required": True if rule.sync_merge_required else None,
             "tag_pattern": rule.tag,
             "tag_required": rule.tag_required if rule.tag else None,
             "tag_tokens": tag_tokens(rule.tag) if rule.tag else None,
@@ -239,7 +247,7 @@ def normalize_merge_rules(rules: list[MergeRule]) -> list[MergeRule]:
                     tag=tagged_rule.tag,
                     tag_required=False,
                     sync=tagged_rule.sync,
-                    source_must_contain_target=tagged_rule.source_must_contain_target,
+                    sync_merge_required=tagged_rule.sync_merge_required,
                 )
             )
             continue
@@ -254,7 +262,7 @@ def normalize_merge_rules(rules: list[MergeRule]) -> list[MergeRule]:
                     tag=tagged_rule.tag,
                     tag_required=True,
                     sync=tagged_rule.sync,
-                    source_must_contain_target=tagged_rule.source_must_contain_target,
+                    sync_merge_required=tagged_rule.sync_merge_required,
                 )
             )
             continue
@@ -264,31 +272,7 @@ def normalize_merge_rules(rules: list[MergeRule]) -> list[MergeRule]:
     return normalized
 
 
-def annotate_source_freshness_rules(rules: list[MergeRule]) -> list[MergeRule]:
-    sync_rule_indexes: set[int] = set()
-    freshness_rule_indexes: set[int] = set()
-
-    for index, rule in enumerate(rules):
-        if not is_source_freshness_family(rule.source):
-            continue
-        for prior_index in range(index - 1, -1, -1):
-            prior = rules[prior_index]
-            if prior.tag is None and prior.source == rule.target and prior.target == rule.source:
-                sync_rule_indexes.add(prior_index)
-                freshness_rule_indexes.add(index)
-                break
-
-    return [
-        replace(
-            rule,
-            sync=index in sync_rule_indexes,
-            source_must_contain_target=index in freshness_rule_indexes,
-        )
-        for index, rule in enumerate(rules)
-    ]
-
-
-def is_source_freshness_family(source: str) -> bool:
+def is_sync_merge_required_family(source: str) -> bool:
     return source in {"feat/*", "infra/*"}
 
 
