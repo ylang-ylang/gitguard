@@ -1,14 +1,34 @@
-# Dev Feat Flow
+# Dev Feat Case Flow
 
 ```mermaid
 gitGraph TB:
     commit id:"init"
-    branch dev
+
+    checkout main
+    branch dev order: 1
+    checkout main
+    commit id:"main after dev fork"
+
     checkout dev
-    branch "feat/*"
+    commit id:"dev branch history"
+    branch "feat/*" order: 2
+    checkout main
+    commit id:"main after feat fork"
+
+    checkout main
+    branch "case/*/*" order: 3
+    checkout main
+    commit id:"main after case fork"
+
+    checkout "case/*/*"
+    commit id:"case work"
+
     checkout "feat/*"
+    merge "case/*/*" id:"case/*/* to feat/*"
     commit id:"feature work"
 
+    checkout dev
+    commit id:"dev branch sync point"
     checkout "feat/*"
     merge dev id:"dev to feat/* sync"
 
@@ -21,6 +41,9 @@ gitGraph TB:
 
 ## Rules
 
+- `case/*/*` means `case/<context>/<topic>`, where `<context>` is a real project, customer, dataset, robot, deployment, or reproducible scenario.
+- `case/*/*` branches from `main` and may merge only into `feat/*`.
+- `case/*/*` must not merge directly into `dev` or `main`; reusable work must be distilled through `feat/*`.
 - `feat/*` branches from `dev`.
 - `feat/*` work must absorb the current `dev` and merge back to `dev`.
 - `dev` is the integration branch and must not receive direct commits after the policy is installed.
