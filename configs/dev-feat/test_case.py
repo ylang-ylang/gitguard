@@ -44,7 +44,9 @@ class DevFeatHookTest(PolicyHookTestBase):
 
     def run_rejection_tests(self) -> None:
         self.expect_rejected(["branch", "feat/from-main", "main"], "BRANCH_SOURCE_MISMATCH")
+        self.expect_rejected(["branch", "wrong/test", "dev"], "BRANCH_NAME_NOT_ALLOWED")
         self.expect_rejected(["branch", "release/demo", "dev"], "BRANCH_NAME_NOT_ALLOWED")
+        self.expect_illegal_branch_rename_rejected()
 
         self.git("checkout", "dev")
         self.expect_rejected(
@@ -77,6 +79,11 @@ class DevFeatHookTest(PolicyHookTestBase):
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
+
+    def expect_illegal_branch_rename_rejected(self) -> None:
+        branch = "feat/rename-guard"
+        self.create_branch(branch, "dev")
+        self.expect_rejected(["branch", "-m", branch, "wrong/renamed"], "BRANCH_NAME_NOT_ALLOWED")
 
     def create_feature_release(self) -> None:
         branch = "feat/initial"
