@@ -38,6 +38,7 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.create_old_release_fixture()
         self.create_stale_infra_fixture()
         self.create_stale_feat_fixture()
+        self.create_infra_commit_after_sync_fixture()
 
     def mark_rejection_tests_start(self) -> None:
         branch = "feat/rejection-boundary"
@@ -67,14 +68,21 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.git("checkout", "dev")
         self.expect_rejected(
             ["merge", "--no-ff", "--no-edit", "infra/stale"],
-            "MERGE_SOURCE_BEHIND_TARGET",
+            "SYNC_MERGE_REQUIRED",
             cleanup=self.cleanup_merge_state,
         )
 
         self.git("checkout", "dev")
         self.expect_rejected(
             ["merge", "--no-ff", "--no-edit", "feat/stale"],
-            "MERGE_SOURCE_BEHIND_TARGET",
+            "SYNC_MERGE_REQUIRED",
+            cleanup=self.cleanup_merge_state,
+        )
+
+        self.git("checkout", "dev")
+        self.expect_rejected(
+            ["merge", "--no-ff", "--no-edit", "infra/commit-after-sync"],
+            "SYNC_MERGE_REQUIRED",
             cleanup=self.cleanup_merge_state,
         )
 
@@ -101,8 +109,8 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.create_branch(branch, "dev")
         infra_sha = self.commit_file(branch, "infra.txt", "infra\n", "infra work")
         dev_sha = self.commit_file("dev", "dev-during-infra.txt", "dev during infra\n", "dev advances during infra work")
-        self.merge_to("dev", branch)
         validation_sha = self.commit_file(branch, "infra-validation.txt", "infra validation\n", "infra validation")
+        self.merge_to("dev", branch)
         self.merge_to(branch, "dev")
         self.assert_is_ancestor(infra_sha, "dev")
         self.assert_is_ancestor(dev_sha, branch)
@@ -180,6 +188,14 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.create_branch(branch, "dev")
         self.commit_file(branch, "feature-stale.txt", "feature stale\n", "fixture stale feat")
         self.commit_file("dev", "dev-after-stale-feature.txt", "dev after stale feature\n", "advance dev after stale feature")
+
+    def create_infra_commit_after_sync_fixture(self) -> None:
+        branch = "infra/commit-after-sync"
+        self.create_branch(branch, "dev")
+        self.commit_file(branch, "infra-after-sync.txt", "infra after sync\n", "fixture infra after sync")
+        self.commit_file("dev", "dev-before-sync-commit.txt", "dev before sync commit\n", "advance dev before sync commit")
+        self.merge_to("dev", branch)
+        self.commit_file(branch, "post-sync.txt", "post sync\n", "commit after sync")
 
     def assert_hotfix_wrong_line_rejected(self) -> None:
         branch = "hotfix/wrong-line-reject"

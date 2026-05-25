@@ -558,7 +558,7 @@ def validate_protected_target_update(
         )
 
     candidate = candidates[0]
-    enforce_source_freshness(repo, candidate, update)
+    enforce_sync_merge_required(repo, candidate, update)
 
     required = required_target_refs(policy, candidate.rule["source"])
     if len(required) <= 1:
@@ -606,13 +606,15 @@ def rule_targets_ref(rule: dict[str, Any], ref: str) -> bool:
     return rule.get("target_ref") == ref
 
 
-def enforce_source_freshness(repo: Path, candidate: SourceCandidate, update: RefUpdate) -> None:
-    if not candidate.rule.get("source_must_contain_target"):
+def enforce_sync_merge_required(repo: Path, candidate: SourceCandidate, update: RefUpdate) -> None:
+    if not candidate.rule.get("sync_merge_required"):
         return
-    if is_ancestor(repo, update.old, candidate.sha):
+    if is_first_parent_ancestor(repo, update.old, candidate.sha):
+        return
+    if has_non_first_parent(repo, candidate.sha, update.old):
         return
     raise HookReject(
-        "MERGE_SOURCE_BEHIND_TARGET",
+        "SYNC_MERGE_REQUIRED",
         source_ref=candidate.ref,
         source=short_sha(candidate.sha),
         target_ref=update.ref,
@@ -1181,6 +1183,21 @@ def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
     if ancestor == ZERO or descendant == ZERO:
         return False
     return git(repo, "merge-base", "--is-ancestor", ancestor, descendant, check=False).returncode == 0
+
+
+def is_first_parent_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
+    if ancestor == ZERO or descendant == ZERO:
+        return False
+    result = git(repo, "rev-list", "--first-parent", "--format=%H", descendant)
+    return ancestor in {line for line in result.stdout.splitlines() if line and not line.startswith("commit ")}
+
+
+def has_non_first_parent(repo: Path, commit: str, parent: str) -> bool:
+    if commit == ZERO or parent == ZERO:
+        return False
+    result = git(repo, "rev-list", "--parents", "-n", "1", commit)
+    parts = result.stdout.strip().split()
+    return len(parts) > 2 and parent in parts[2:]
 
 
 def ref_contains(repo: Path, ref_or_sha: str, sha: str) -> bool:
