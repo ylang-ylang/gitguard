@@ -319,3 +319,21 @@ The bundled Codex skill for writing compatible policy docs lives at:
 ```text
 .codex/skills/git-guard-policy-writer/SKILL.md
 ```
+
+## License
+
+Git Guard is licensed under the GNU Affero General Public License,
+version 3 only. The SPDX license identifier is `AGPL-3.0-only`.
+
+See `LICENSE` for the full license text and `NOTICE` for source
+attribution. The public source repository is:
+
+```text
+https://github.com/ylang-ylang/gitguard
+```
+
+The `LICENSE` text is sourced from the Free Software Foundation:
+
+```text
+https://www.gnu.org/licenses/agpl-3.0.txt
+```
