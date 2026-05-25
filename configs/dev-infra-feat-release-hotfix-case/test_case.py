@@ -56,10 +56,12 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.expect_rejected(["branch", "hotfix/from-dev", "dev"], "BRANCH_SOURCE_MISMATCH")
 
         self.git("checkout", "dev")
+        self.ensure_current_branch_log_staged()
         self.expect_rejected(
             ["commit", "--allow-empty", "-m", "direct dev commit"],
             "PROTECTED_REF_NO_ALLOWED_SOURCE",
         )
+        self.git_no_hooks("reset", "--hard", "HEAD")
 
         self.git("checkout", "main")
         self.expect_merge_rejected("infra/reject-to-main", "PROTECTED_REF_NO_ALLOWED_SOURCE")

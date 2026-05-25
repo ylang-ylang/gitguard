@@ -46,12 +46,15 @@ class DevOnlyHookTest(PolicyHookTestBase):
         self.expect_rejected(["branch", "release/demo", "dev"], "BRANCH_NAME_NOT_ALLOWED")
 
         self.git("checkout", "main")
+        self.ensure_current_branch_log_staged()
         self.expect_rejected(
             ["commit", "--allow-empty", "-m", "direct main commit"],
             "PROTECTED_REF_NO_ALLOWED_SOURCE",
         )
+        self.git_no_hooks("reset", "--hard", "HEAD")
 
         self.git("checkout", "dev")
+        self.ensure_current_branch_log_staged()
         self.git("commit", "--allow-empty", "-m", "direct dev commit")
         self.direct_dev_sha = self.rev_parse("dev")
 
