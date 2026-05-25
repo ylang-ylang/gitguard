@@ -60,6 +60,7 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
             ["commit", "--allow-empty", "-m", "direct dev commit"],
             "PROTECTED_REF_NO_ALLOWED_SOURCE",
         )
+        self.assert_protected_branch_guard_can_be_disabled()
 
         self.git("checkout", "main")
         self.expect_rejected(
@@ -232,18 +233,15 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.create_branch(branch, "dev")
         self.write_file(".branch_logs/untracked.md", "untracked branch log\n")
         self.write_file("log-tracking.txt", "work\n")
-        self.git("add", "log-tracking.txt")
-
-        result = self.git("commit", "-m", "missing staged branch log", check=False)
-        combined = result.stdout + result.stderr
-        if result.returncode == 0 or "BRANCH_LOG_UNTRACKED" not in combined:
-            raise AssertionError(
-                f"{self.name}: expected untracked branch log rejection\n"
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-            )
-
         self.git("add", ".branch_logs/untracked.md")
-        self.git("commit", "-m", "track branch log")
+        self.git("add", "log-tracking.txt")
+        self.git("commit", "-m", "discard branch-local log")
+
+        tracked_branch_logs = self.git("ls-tree", "-r", "--name-only", "HEAD", "--", ".branch_logs").stdout.splitlines()
+        if tracked_branch_logs != [".branch_logs/.gitkeep"]:
+            raise AssertionError(f"{self.name}: branch log commit should keep only .gitkeep: {tracked_branch_logs}")
+        if (self.repo / ".branch_logs" / "untracked.md").exists():
+            raise AssertionError(f"{self.name}: branch-local log file should be discarded from worktree")
 
         config_path = self.repo / ".git-guard" / "config.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -252,20 +250,10 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.git("rm", "-r", ".branch_logs")
         self.write_file("log-required.txt", "work\n")
         self.git("add", "log-required.txt")
-        result = self.git("commit", "-m", "missing required branch log", check=False)
-        combined = result.stdout + result.stderr
-        if result.returncode == 0 or "BRANCH_LOG_REQUIRED" not in combined:
-            raise AssertionError(
-                f"{self.name}: expected required branch log rejection\n"
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-            )
-        self.git_no_hooks("reset", "--hard", "HEAD")
-
-        self.write_file(".branch_logs/required.md", "required branch log\n")
-        self.write_file("log-required.txt", "work\n")
-        self.git("add", "log-required.txt")
-        self.git("add", ".branch_logs/required.md")
-        self.git("commit", "-m", "add required branch log")
+        self.git("commit", "-m", "recreate required branch log placeholder")
+        tracked_branch_logs = self.git("ls-tree", "-r", "--name-only", "HEAD", "--", ".branch_logs").stdout.splitlines()
+        if tracked_branch_logs != [".branch_logs/.gitkeep"]:
+            raise AssertionError(f"{self.name}: missing branch log directory should recreate .gitkeep: {tracked_branch_logs}")
 
         config.setdefault("branch_logs", {})["path"] = ".branch-log.md"
         config.setdefault("branch_logs", {})["force_required"] = True
@@ -294,22 +282,28 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
     def assert_branch_log_target_invariant_on_merge(self) -> None:
         branch = "feat/log-drop"
         self.create_branch(branch, "dev")
-        self.commit_file(branch, "log-drop-feature.txt", "feature\n", "feature with branch log")
-        self.commit_file(branch, ".branch_logs/log-drop.md", "branch-local log\n", "record branch log")
+        self.git("checkout", branch)
+        self.write_file("log-drop-feature.txt", "feature\n")
+        self.write_file(".branch_logs/log-drop.md", "branch-local log\n")
+        self.git("add", "log-drop-feature.txt", ".branch_logs/log-drop.md")
+        self.git("commit", "-m", "feature with discarded branch log")
 
         self.git("checkout", "dev")
-        self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", branch],
-            "BRANCH_LOG_TARGET_CHANGED",
-            cleanup=self.cleanup_merge_state,
-        )
-
-        self.git("checkout", "dev")
-        self.git("merge", "--no-ff", "--no-commit", branch)
-        self.restore_target_branch_log_tree()
-        self.git("commit", "-m", f"MR {branch} to dev without branch log")
-
+        self.git("merge", "--no-ff", "--no-edit", branch)
         if (self.repo / ".branch_logs" / "log-drop.md").exists():
+            raise AssertionError(f"{self.name}: source branch log leaked into dev")
+
+        manual_branch = "feat/log-drop-manual"
+        self.create_branch(manual_branch, "dev")
+        self.commit_file(manual_branch, "log-drop-manual-feature.txt", "feature\n", "manual feature with branch log")
+        self.write_file(".branch_logs/log-drop-manual.md", "branch-local log\n")
+        self.git_no_hooks("add", ".branch_logs/log-drop-manual.md")
+        self.git_no_hooks("commit", "-m", "seed manual branch log with hooks disabled")
+        self.git("checkout", "dev")
+        self.git("merge", "--no-ff", "--no-edit", "--no-commit", manual_branch)
+        self.git("commit", "-m", f"MR {manual_branch} to dev without branch log")
+
+        if (self.repo / ".branch_logs" / "log-drop-manual.md").exists():
             raise AssertionError(f"{self.name}: source branch log leaked into dev")
 
         self.assert_branch_log_target_invariant_on_sync_merge()
@@ -319,7 +313,7 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         branch = "feat/log-sync-target"
         self.create_branch(branch, "dev")
         self.commit_file(branch, "log-sync-target.txt", "feature work\n", "feature work before sync")
-        target_log_sha = self.commit_file(branch, ".branch_logs/target.md", "target-local log\n", "record target branch log")
+        target_log_sha = self.rev_parse(branch)
 
         self.git("checkout", "dev")
         self.write_file(".branch_logs/dev-source.md", "source branch log should not propagate\n")
@@ -327,15 +321,38 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.git_no_hooks("commit", "-m", "seed source branch log with hooks disabled")
 
         self.git("checkout", branch)
-        self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", "dev"],
-            "BRANCH_LOG_TARGET_CHANGED",
-            cleanup=self.cleanup_merge_state,
-        )
-        if self.rev_parse(branch) != target_log_sha:
-            raise AssertionError(f"{self.name}: rejected sync merge moved target branch")
+        self.git("merge", "--no-ff", "--no-edit", "--no-commit", "dev")
+        self.git("commit", "-m", "sync dev without branch log")
+        if self.rev_parse(branch) == target_log_sha:
+            raise AssertionError(f"{self.name}: sync merge did not move feature branch")
+        if (self.repo / ".branch_logs" / "dev-source.md").exists():
+            raise AssertionError(f"{self.name}: source branch log leaked into synced feature branch")
 
         self.git_no_hooks("branch", "-f", "dev", clean_dev_sha)
+
+
+    def assert_protected_branch_guard_can_be_disabled(self) -> None:
+        self.git("checkout", "dev")
+        clean_dev_sha = self.rev_parse("dev")
+        config_path = self.repo / ".git-guard" / "config.json"
+        original_config = config_path.read_text(encoding="utf-8")
+        try:
+            config = json.loads(original_config)
+            config.setdefault("protected_branches", {})["enabled"] = False
+            config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            self.write_file("direct-dev-emergency.txt", "emergency change\n")
+            self.git("add", "direct-dev-emergency.txt")
+            result = self.git("commit", "-m", "emergency direct dev commit")
+            combined = result.stdout + result.stderr
+            if "PROTECTED_BRANCH_GUARD_DISABLED" not in combined:
+                raise AssertionError(
+                    f"{self.name}: expected disabled protected branch guard warning\n"
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+                )
+        finally:
+            config_path.write_text(original_config, encoding="utf-8")
+            self.git_no_hooks("reset", "--hard", clean_dev_sha)
 
 
 TEST_CASE = DevFeatCaseHookTest

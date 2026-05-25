@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import sys
@@ -20,6 +21,9 @@ DEFAULT_CONFIG = {
     },
     "pre_push": {
         "auto_push_missing_tags": True,
+    },
+    "protected_branches": {
+        "enabled": True,
     },
     "runtime": {
         "auto_sync": True,
@@ -85,6 +89,7 @@ class LocalPolicyTag:
 class BranchLogSettings:
     path: str
     force_required: bool
+    is_directory: bool
 
 
 class HookReject(RuntimeError):
@@ -116,7 +121,7 @@ def format_context_value(value: Any) -> str:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: reference_transaction_hook.py <phase|pre-push>", file=sys.stderr)
+        print("usage: reference_transaction_hook.py <phase|pre-push|pre-commit|pre-merge-commit>", file=sys.stderr)
         return 2
 
     command = sys.argv[1]
@@ -142,6 +147,14 @@ def main() -> int:
         if command == "pre-commit":
             if len(sys.argv) != 2:
                 raise HookReject("HOOK_PRE_COMMIT_USAGE", argv=sys.argv[1:])
+            prepare_merge_commit(repo, config, require_merge_state=True)
+            validate_pre_commit(repo, policy, config)
+            return 0
+
+        if command == "pre-merge-commit":
+            if len(sys.argv) != 2:
+                raise HookReject("HOOK_PRE_MERGE_COMMIT_USAGE", argv=sys.argv[1:])
+            prepare_merge_commit(repo, config, require_merge_state=False)
             validate_pre_commit(repo, policy, config)
             return 0
 
@@ -271,12 +284,14 @@ def branch_log_settings(config: dict[str, Any]) -> BranchLogSettings:
     if not isinstance(raw_path, str):
         raise HookReject("CONFIG_INVALID", key="branch_logs.path", expected="string")
 
+    normalized_raw_path = raw_path.strip().replace("\\", "/")
     path = normalize_branch_log_path(raw_path)
+    is_directory = normalized_raw_path.endswith("/")
     force_required = section.get("force_required", DEFAULT_CONFIG["branch_logs"]["force_required"])
     if not isinstance(force_required, bool):
         raise HookReject("CONFIG_INVALID", key="branch_logs.force_required", expected="boolean")
 
-    return BranchLogSettings(path=path, force_required=force_required)
+    return BranchLogSettings(path=path, force_required=force_required, is_directory=is_directory)
 
 
 def normalize_branch_log_path(raw_path: str) -> str:
@@ -292,21 +307,24 @@ def normalize_branch_log_path(raw_path: str) -> str:
 
 def validate_pre_commit(repo: Path, policy: dict[str, Any], config: dict[str, Any]) -> None:
     settings = branch_log_settings(config)
-    untracked = branch_log_untracked_files(repo, settings.path)
-    if untracked:
-        raise HookReject(
-            "BRANCH_LOG_UNTRACKED",
-            path=settings.path,
-            files=untracked[:5],
-        )
+    if settings.is_directory:
+        normalize_branch_log_directory_to_gitkeep(repo, settings)
+    else:
+        untracked = branch_log_untracked_files(repo, settings.path)
+        if untracked:
+            raise HookReject(
+                "BRANCH_LOG_UNTRACKED",
+                path=settings.path,
+                files=untracked[:5],
+            )
 
-    unstaged = branch_log_unstaged_files(repo, settings.path)
-    if unstaged:
-        raise HookReject(
-            "BRANCH_LOG_UNSTAGED",
-            path=settings.path,
-            files=unstaged[:5],
-        )
+        unstaged = branch_log_unstaged_files(repo, settings.path)
+        if unstaged:
+            raise HookReject(
+                "BRANCH_LOG_UNSTAGED",
+                path=settings.path,
+                files=unstaged[:5],
+            )
 
     if not settings.force_required:
         return
@@ -316,9 +334,59 @@ def validate_pre_commit(repo: Path, policy: dict[str, Any], config: dict[str, An
         return
     if not is_allowed_branch_ref(policy, ref):
         return
-    if branch_log_tracked_in_index(repo, settings.path):
+    if branch_log_required_path_tracked(repo, settings):
         return
     raise HookReject("BRANCH_LOG_REQUIRED", ref=ref, path=settings.path)
+
+
+def prepare_merge_commit(repo: Path, config: dict[str, Any], require_merge_state: bool) -> None:
+    if require_merge_state and not merge_in_progress(repo):
+        return
+
+    settings = branch_log_settings(config)
+    normalize_branch_log_directory_to_gitkeep(repo, settings)
+
+
+def merge_in_progress(repo: Path) -> bool:
+    return git_path(repo, "MERGE_HEAD").exists()
+
+
+def normalize_branch_log_directory_to_gitkeep(repo: Path, settings: BranchLogSettings) -> None:
+    if not settings.is_directory:
+        return
+
+    path = settings.path
+    git_literal_pathspec(repo, "rm", "-r", "--cached", "--ignore-unmatch", "--", path)
+
+    branch_log_path = repo / path
+    if branch_log_path.is_dir():
+        shutil.rmtree(branch_log_path)
+    elif branch_log_path.exists():
+        branch_log_path.unlink()
+
+    ensure_branch_log_gitkeep(repo, settings)
+
+
+def ensure_branch_log_gitkeep(repo: Path, settings: BranchLogSettings) -> None:
+    if not settings.force_required or not settings.is_directory:
+        return
+
+    placeholder = branch_log_gitkeep_path(repo, settings)
+    placeholder.parent.mkdir(parents=True, exist_ok=True)
+    if not placeholder.exists():
+        placeholder.write_text("", encoding="utf-8")
+    git_literal_pathspec(repo, "add", "--", str(placeholder.relative_to(repo)))
+
+
+def branch_log_gitkeep_path(repo: Path, settings: BranchLogSettings) -> Path:
+    return repo / settings.path.rstrip("/") / ".gitkeep"
+
+
+def branch_log_required_path_tracked(repo: Path, settings: BranchLogSettings) -> bool:
+    if settings.is_directory:
+        path = branch_log_gitkeep_path(repo, settings).relative_to(repo).as_posix()
+        return bool(git_literal_pathspec(repo, "ls-files", "--cached", "--", path).stdout.splitlines())
+    return branch_log_tracked_in_index(repo, settings.path)
 
 
 def validate_pre_push(
@@ -759,7 +827,12 @@ def validate_branch_creation_or_replacement(
         raise HookReject("BRANCH_SOURCE_MISMATCH", ref=update.ref, source_ref=source_ref, new=short_sha(update.new))
 
 
-def validate_managed_branch_update(repo: Path, policy: dict[str, Any], config: dict[str, Any], update: RefUpdate) -> None:
+def validate_managed_branch_update(
+    repo: Path,
+    policy: dict[str, Any],
+    config: dict[str, Any],
+    update: RefUpdate,
+) -> None:
     if update.new == ZERO:
         return
     if not is_ancestor(repo, update.old, update.new):
@@ -819,6 +892,10 @@ def validate_protected_target_update(
         raise HookReject("PROTECTED_REF_DELETE", ref=update.ref)
     if not is_ancestor(repo, update.old, update.new):
         raise HookReject("PROTECTED_REF_NON_FAST_FORWARD", ref=update.ref, old=short_sha(update.old), new=short_sha(update.new))
+
+    if not config_bool(config, "protected_branches", "enabled"):
+        warn("PROTECTED_BRANCH_GUARD_DISABLED", ref=update.ref)
+        return
 
     if direct_commit_allowed(repo, policy, update):
         return
@@ -903,6 +980,8 @@ def enforce_branch_log_target_invariant(repo: Path, config: dict[str, Any], upda
     settings = branch_log_settings(config)
     if not branch_log_path_changed(repo, update.old, update.new, settings.path):
         return
+    if branch_log_tree_is_gitkeep_only(repo, update.new, settings):
+        return
     raise HookReject(
         "BRANCH_LOG_TARGET_CHANGED",
         ref=update.ref,
@@ -910,6 +989,14 @@ def enforce_branch_log_target_invariant(repo: Path, config: dict[str, Any], upda
         old=short_sha(update.old),
         new=short_sha(update.new),
     )
+
+
+def branch_log_tree_is_gitkeep_only(repo: Path, commit: str, settings: BranchLogSettings) -> bool:
+    if not settings.force_required or not settings.is_directory:
+        return False
+    expected = f"{settings.path.rstrip('/')}/.gitkeep"
+    files = git_literal_pathspec(repo, "ls-tree", "-r", "--name-only", commit, "--", settings.path).stdout.splitlines()
+    return files == [expected]
 
 
 def maximal_source_candidates(repo: Path, candidates: list[SourceCandidate]) -> list[SourceCandidate]:
@@ -1450,6 +1537,11 @@ def current_branch_ref(repo: Path) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip()
+
+
+def git_path(repo: Path, name: str) -> Path:
+    result = git(repo, "rev-parse", "--path-format=absolute", "--git-path", name)
+    return Path(result.stdout.strip())
 
 
 def branch_log_untracked_files(repo: Path, path: str) -> list[str]:
