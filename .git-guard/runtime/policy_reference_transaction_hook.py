@@ -147,15 +147,17 @@ def main() -> int:
         if command == "pre-commit":
             if len(sys.argv) != 2:
                 raise HookReject("HOOK_PRE_COMMIT_USAGE", argv=sys.argv[1:])
-            prepare_merge_commit(repo, config, require_merge_state=True)
-            validate_pre_commit(repo, policy, config)
+            is_merge_commit = merge_in_progress(repo)
+            if is_merge_commit:
+                prepare_merge_commit(repo, config)
+            validate_pre_commit(repo, policy, config, require_branch_log_change=not is_merge_commit)
             return 0
 
         if command == "pre-merge-commit":
             if len(sys.argv) != 2:
                 raise HookReject("HOOK_PRE_MERGE_COMMIT_USAGE", argv=sys.argv[1:])
-            prepare_merge_commit(repo, config, require_merge_state=False)
-            validate_pre_commit(repo, policy, config)
+            prepare_merge_commit(repo, config)
+            validate_pre_commit(repo, policy, config, require_branch_log_change=False)
             return 0
 
         if len(sys.argv) != 2:
@@ -305,26 +307,31 @@ def normalize_branch_log_path(raw_path: str) -> str:
     return path
 
 
-def validate_pre_commit(repo: Path, policy: dict[str, Any], config: dict[str, Any]) -> None:
+def validate_pre_commit(
+    repo: Path,
+    policy: dict[str, Any],
+    config: dict[str, Any],
+    require_branch_log_change: bool,
+) -> None:
     settings = branch_log_settings(config)
     if settings.is_directory:
-        normalize_branch_log_directory_to_gitkeep(repo, settings)
-    else:
-        untracked = branch_log_untracked_files(repo, settings.path)
-        if untracked:
-            raise HookReject(
-                "BRANCH_LOG_UNTRACKED",
-                path=settings.path,
-                files=untracked[:5],
-            )
+        ensure_branch_log_gitkeep(repo, settings)
 
-        unstaged = branch_log_unstaged_files(repo, settings.path)
-        if unstaged:
-            raise HookReject(
-                "BRANCH_LOG_UNSTAGED",
-                path=settings.path,
-                files=unstaged[:5],
-            )
+    untracked = branch_log_untracked_files(repo, settings.path)
+    if untracked:
+        raise HookReject(
+            "BRANCH_LOG_UNTRACKED",
+            path=settings.path,
+            files=untracked[:5],
+        )
+
+    unstaged = branch_log_unstaged_files(repo, settings.path)
+    if unstaged:
+        raise HookReject(
+            "BRANCH_LOG_UNSTAGED",
+            path=settings.path,
+            files=unstaged[:5],
+        )
 
     if not settings.force_required:
         return
@@ -334,15 +341,19 @@ def validate_pre_commit(repo: Path, policy: dict[str, Any], config: dict[str, An
         return
     if not is_allowed_branch_ref(policy, ref):
         return
-    if branch_log_required_path_tracked(repo, settings):
+    if not require_branch_log_change:
+        if branch_log_required_path_tracked(repo, settings):
+            return
+        ensure_branch_log_gitkeep(repo, settings)
+        if branch_log_required_path_tracked(repo, settings):
+            return
+        raise HookReject("BRANCH_LOG_REQUIRED", ref=ref, path=settings.path)
+    if meaningful_branch_log_staged_files(repo, settings):
         return
-    raise HookReject("BRANCH_LOG_REQUIRED", ref=ref, path=settings.path)
+    raise HookReject("BRANCH_LOG_CHANGE_REQUIRED", ref=ref, path=settings.path)
 
 
-def prepare_merge_commit(repo: Path, config: dict[str, Any], require_merge_state: bool) -> None:
-    if require_merge_state and not merge_in_progress(repo):
-        return
-
+def prepare_merge_commit(repo: Path, config: dict[str, Any]) -> None:
     settings = branch_log_settings(config)
     normalize_branch_log_directory_to_gitkeep(repo, settings)
 
@@ -387,6 +398,14 @@ def branch_log_required_path_tracked(repo: Path, settings: BranchLogSettings) ->
         path = branch_log_gitkeep_path(repo, settings).relative_to(repo).as_posix()
         return bool(git_literal_pathspec(repo, "ls-files", "--cached", "--", path).stdout.splitlines())
     return branch_log_tracked_in_index(repo, settings.path)
+
+
+def meaningful_branch_log_staged_files(repo: Path, settings: BranchLogSettings) -> list[str]:
+    files = git_literal_pathspec(repo, "diff", "--cached", "--name-only", "--", settings.path).stdout.splitlines()
+    if not settings.is_directory:
+        return files
+    gitkeep = branch_log_gitkeep_path(repo, settings).relative_to(repo).as_posix()
+    return [path for path in files if path != gitkeep]
 
 
 def validate_pre_push(
