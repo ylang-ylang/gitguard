@@ -53,11 +53,7 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.expect_illegal_branch_rename_rejected()
 
         self.git("checkout", "dev")
-        self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", "case/dev-context/reject-to-dev"],
-            "PROTECTED_REF_NO_ALLOWED_SOURCE",
-            cleanup=self.cleanup_merge_state,
-        )
+        self.expect_merge_rejected("case/dev-context/reject-to-dev", "PROTECTED_REF_NO_ALLOWED_SOURCE")
 
         self.git("checkout", "dev")
         self.expect_rejected(
