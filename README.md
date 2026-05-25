@@ -65,10 +65,13 @@ Git Guard intentionally supports a small Mermaid subset:
 
 - `branch NAME`: records a branch-from edge from the current checkout.
 - `checkout NAME`: changes the current target context.
+- `commit id:"..."`: records direct-commit permission for the current non-`main` checkout.
 - `merge NAME id:"unique display label"`: records a merge rule into the current checkout.
 - `merge NAME id:"unique display label" tag:"..."`: records a merge rule plus a tag policy for the merge result on the current checkout target.
 
 Mermaid `id` values are commit ids and must be unique within the graph. Git Guard derives the policy rule id from the merge source and current checkout target, for example `dev to main`.
+
+A `commit id` containing bare lowercase `branch` as a whitespace-separated word is treated as a compressed branch-history marker. Mermaid renders it with a dashed outline, and Git Guard ignores it when deriving direct-commit permission. For example, `commit id:"dev branch history"` can make a protected integration branch visible in the diagram without allowing direct commits to that branch.
 
 If the same source and target appear once without `tag:"..."` and once with `tag:"..."`, Git Guard treats the tag as optional: the merge is allowed without a tag, but any matching tag is still validated.
 
@@ -115,13 +118,13 @@ Install one config into a target repository:
 ```bash
 PYTHONPATH=src python -m cli install \
   --repo /path/to/repo \
-  --config dev-infra-feat-release-hotfix \
+  --config dev-infra-feat-release-hotfix-case \
   --scope local
 ```
 
 `--config` accepts:
 
-- a bundled config name under `configs/`, for example `dev-infra-feat-release-hotfix`;
+- a bundled config name under `configs/`, for example `dev-infra-feat-release-hotfix-case`;
 - a config directory containing `contribution.md`;
 - a direct path to `contribution.md`.
 
@@ -250,9 +253,9 @@ PYTHONPATH=src python -m py_compile \
   configs/__init__.py \
   configs/test_base.py \
   configs/dev-only/test_case.py \
-  configs/dev-feat/test_case.py \
-  configs/dev-feat-release-hotfix/test_case.py \
-  configs/dev-infra-feat-release-hotfix/test_case.py
+  configs/dev-feat-case/test_case.py \
+  configs/dev-feat-release-hotfix-case/test_case.py \
+  configs/dev-infra-feat-release-hotfix-case/test_case.py
 ```
 
 Run integration tests in Docker:
@@ -266,10 +269,10 @@ docker compose down
 The integration test runner creates one isolated test repo per config:
 
 ```text
-.tmp/dev-feat-release-hotfix
-.tmp/dev-infra-feat-release-hotfix
+.tmp/dev-feat-release-hotfix-case
+.tmp/dev-infra-feat-release-hotfix-case
 .tmp/dev-only
-.tmp/dev-feat
+.tmp/dev-feat-case
 ```
 
 Each test repo contains a valid example Git DAG, then a visible start marker before rejection tests:

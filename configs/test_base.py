@@ -41,6 +41,7 @@ class PolicyHookTestBase:
         self.repo = self.work_root
         self.keep = keep
         self.policy = load_policy_from_markdown(config_dir / "contribution.md")
+        self.assert_dev_direct_commit_policy_matches_rules()
 
     def run(self) -> None:
         if self.work_root.exists() and not self.keep:
@@ -76,6 +77,14 @@ class PolicyHookTestBase:
 
     def checkout_final_branch(self) -> None:
         raise NotImplementedError
+
+    def assert_dev_direct_commit_policy_matches_rules(self) -> None:
+        rules = (self.config_dir / "contribution.md").read_text(encoding="utf-8")
+        direct_commit_names = {item["name"] for item in self.policy.get("direct_commit_refs", [])}
+        if "`dev` is the integration branch and must not receive direct commits" in rules and "dev" in direct_commit_names:
+            raise AssertionError(f"{self.name}: rules forbid direct dev commits, but policy allows them")
+        if "`dev` is the only development branch and may receive direct commits" in rules and "dev" not in direct_commit_names:
+            raise AssertionError(f"{self.name}: rules allow direct dev commits, but policy rejects them")
 
     def install_hook(self) -> None:
         self.seed_default_branch_logs_before_install()
