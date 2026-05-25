@@ -188,7 +188,7 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
 {
   "branch_logs": {
     "path": ".branch_logs/",
-    "required": false
+    "force_required": true
   },
   "pre_push": {
     "auto_push_missing_tags": true
@@ -206,9 +206,11 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
 
 The installed `pre-commit` hook rejects commits when files under `branch_logs.path` are untracked, ignored, or have unstaged working-tree changes. This keeps branch logs from becoming local-only notes that are not actually recorded in the branch history.
 
-If `branch_logs.required` is `true`, commits on policy-managed branches must have tracked content at `branch_logs.path` in the index. If it is `false`, the path is optional, but any existing branch-log content still has to be tracked and staged cleanly before commit.
+If `branch_logs.force_required` is `true`, commits on policy-managed branches must have tracked content at `branch_logs.path` in the index. This is the default. If it is `false`, the path is optional, but any existing branch-log content still has to be tracked and staged cleanly before commit.
 
-When a policy-managed merge updates another branch, Git Guard requires `branch_logs.path` to remain unchanged relative to the target branch's old head. If a feature branch contains `.branch_logs/feat.md`, merging that feature into `dev` must produce a `dev` merge result that drops that branch-local path. Otherwise the merge is rejected with `BRANCH_LOG_MUST_BE_DROPPED`.
+`branch_logs.path` is target-local during policy-managed merges. Any allowed merge that updates a target branch must leave the files and directory tree under `branch_logs.path` identical to that target branch's old head. This includes file content, filenames, directory structure, file modes, additions, deletions, and renames. If a feature branch contains `.branch_logs/feat.md`, merging that feature into `dev` must produce a `dev` merge result whose `.branch_logs/` tree is unchanged from `dev` before the merge. Likewise, a `dev` to `feat/*` sync merge must not add, remove, or modify that feature branch's existing `.branch_logs/` tree. Otherwise the merge is rejected with `BRANCH_LOG_TARGET_CHANGED`.
+
+If a Git merge reports conflicts under `branch_logs.path`, resolve those conflicts by keeping the target branch version and discarding the source branch version. The runtime hook still verifies the final merge result before the target ref is updated.
 
 For required `merge ... tag:"..."` rules, Git Guard treats the branch merge and tag creation as separate Git ref transactions. The merge may complete first, then the hook records a pending tag requirement for the target merge result. Until the matching tag is created, that target ref is locked with `PENDING_TAG_TARGET_MOVED`. Other refs, including the source branch, are not blocked by that pending release tag.
 

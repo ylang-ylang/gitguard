@@ -77,7 +77,7 @@ class DevFeatHookTest(PolicyHookTestBase):
         self.assert_pre_push_auto_syncs_release_tags()
         self.assert_pre_push_auto_sync_can_be_disabled()
         self.assert_branch_log_pre_commit_guards()
-        self.assert_branch_log_must_be_dropped_on_merge()
+        self.assert_branch_log_target_invariant_on_merge()
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
@@ -133,7 +133,7 @@ class DevFeatHookTest(PolicyHookTestBase):
             "pending dev move",
         )
         self.git("checkout", "dev")
-        self.git("merge", "--no-ff", "--no-edit", branch)
+        self.merge_to(branch, "dev")
 
     def expect_pending_main_target_move_rejected(self) -> None:
         self.git("checkout", "main")
@@ -218,11 +218,9 @@ class DevFeatHookTest(PolicyHookTestBase):
 
         config_path = self.repo / ".git-guard" / "config.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
-        config.setdefault("branch_logs", {})["required"] = True
-        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
         required_branch = "feat/log-required"
         self.create_branch(required_branch, "dev")
+        self.git("rm", "-r", ".branch_logs")
         self.write_file("log-required.txt", "work\n")
         self.git("add", "log-required.txt")
         result = self.git("commit", "-m", "missing required branch log", check=False)
@@ -232,13 +230,16 @@ class DevFeatHookTest(PolicyHookTestBase):
                 f"{self.name}: expected required branch log rejection\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
+        self.git_no_hooks("reset", "--hard", "HEAD")
 
         self.write_file(".branch_logs/required.md", "required branch log\n")
+        self.write_file("log-required.txt", "work\n")
+        self.git("add", "log-required.txt")
         self.git("add", ".branch_logs/required.md")
         self.git("commit", "-m", "add required branch log")
 
         config.setdefault("branch_logs", {})["path"] = ".branch-log.md"
-        config.setdefault("branch_logs", {})["required"] = True
+        config.setdefault("branch_logs", {})["force_required"] = True
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
         required_file_branch = "feat/log-required-file"
@@ -258,10 +259,10 @@ class DevFeatHookTest(PolicyHookTestBase):
         self.git("commit", "-m", "add required branch log file")
 
         config.setdefault("branch_logs", {})["path"] = ".branch_logs/"
-        config.setdefault("branch_logs", {})["required"] = False
+        config.setdefault("branch_logs", {})["force_required"] = True
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    def assert_branch_log_must_be_dropped_on_merge(self) -> None:
+    def assert_branch_log_target_invariant_on_merge(self) -> None:
         branch = "feat/log-drop"
         self.create_branch(branch, "dev")
         self.commit_file(branch, "log-drop-feature.txt", "feature\n", "feature with branch log")
@@ -270,18 +271,42 @@ class DevFeatHookTest(PolicyHookTestBase):
         self.git("checkout", "dev")
         self.expect_rejected(
             ["merge", "--no-ff", "--no-edit", branch],
-            "BRANCH_LOG_MUST_BE_DROPPED",
+            "BRANCH_LOG_TARGET_CHANGED",
             cleanup=self.cleanup_merge_state,
         )
 
         self.git("checkout", "dev")
         self.git("merge", "--no-ff", "--no-commit", branch)
-        self.git("rm", "-r", "--cached", ".branch_logs")
-        shutil.rmtree(self.repo / ".branch_logs", ignore_errors=True)
+        self.restore_target_branch_log_tree()
         self.git("commit", "-m", f"MR {branch} to dev without branch log")
 
-        if (self.repo / ".branch_logs").exists():
-            raise AssertionError(f"{self.name}: branch log directory leaked into dev")
+        if (self.repo / ".branch_logs" / "log-drop.md").exists():
+            raise AssertionError(f"{self.name}: source branch log leaked into dev")
+
+        self.assert_branch_log_target_invariant_on_sync_merge()
+
+    def assert_branch_log_target_invariant_on_sync_merge(self) -> None:
+        clean_dev_sha = self.rev_parse("dev")
+        branch = "feat/log-sync-target"
+        self.create_branch(branch, "dev")
+        self.commit_file(branch, "log-sync-target.txt", "feature work\n", "feature work before sync")
+        target_log_sha = self.commit_file(branch, ".branch_logs/target.md", "target-local log\n", "record target branch log")
+
+        self.git("checkout", "dev")
+        self.write_file(".branch_logs/dev-source.md", "source branch log should not propagate\n")
+        self.git_no_hooks("add", ".branch_logs/dev-source.md")
+        self.git_no_hooks("commit", "-m", "seed source branch log with hooks disabled")
+
+        self.git("checkout", branch)
+        self.expect_rejected(
+            ["merge", "--no-ff", "--no-edit", "dev"],
+            "BRANCH_LOG_TARGET_CHANGED",
+            cleanup=self.cleanup_merge_state,
+        )
+        if self.rev_parse(branch) != target_log_sha:
+            raise AssertionError(f"{self.name}: rejected sync merge moved target branch")
+
+        self.git_no_hooks("branch", "-f", "dev", clean_dev_sha)
 
 
 TEST_CASE = DevFeatHookTest

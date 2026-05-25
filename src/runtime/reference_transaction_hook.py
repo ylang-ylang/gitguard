@@ -16,7 +16,7 @@ ZERO = "0" * 40
 DEFAULT_CONFIG = {
     "branch_logs": {
         "path": ".branch_logs/",
-        "required": False,
+        "force_required": True,
     },
     "pre_push": {
         "auto_push_missing_tags": True,
@@ -66,7 +66,7 @@ class LocalPolicyTag:
 @dataclass(frozen=True)
 class BranchLogSettings:
     path: str
-    required: bool
+    force_required: bool
 
 
 class HookReject(RuntimeError):
@@ -228,11 +228,11 @@ def branch_log_settings(config: dict[str, Any]) -> BranchLogSettings:
         raise HookReject("CONFIG_INVALID", key="branch_logs.path", expected="string")
 
     path = normalize_branch_log_path(raw_path)
-    required = section.get("required", DEFAULT_CONFIG["branch_logs"]["required"])
-    if not isinstance(required, bool):
-        raise HookReject("CONFIG_INVALID", key="branch_logs.required", expected="boolean")
+    force_required = section.get("force_required", DEFAULT_CONFIG["branch_logs"]["force_required"])
+    if not isinstance(force_required, bool):
+        raise HookReject("CONFIG_INVALID", key="branch_logs.force_required", expected="boolean")
 
-    return BranchLogSettings(path=path, required=required)
+    return BranchLogSettings(path=path, force_required=force_required)
 
 
 def normalize_branch_log_path(raw_path: str) -> str:
@@ -264,7 +264,7 @@ def validate_pre_commit(repo: Path, policy: dict[str, Any], config: dict[str, An
             files=unstaged[:5],
         )
 
-    if not settings.required:
+    if not settings.force_required:
         return
 
     ref = current_branch_ref(repo)
@@ -571,7 +571,7 @@ def validate_managed_branch_update(repo: Path, policy: dict[str, Any], config: d
     for source_ref in introduced_policy_branch_heads(repo, policy, update):
         rule = merge_rule_for_source(policy, source_ref, update.ref)
         if rule:
-            enforce_branch_log_dropped(repo, config, update)
+            enforce_branch_log_target_invariant(repo, config, update)
             continue
         raise HookReject(
             "MANAGED_BRANCH_SOURCE_NOT_ALLOWED",
@@ -638,7 +638,7 @@ def validate_protected_target_update(
 
     candidate = candidates[0]
     enforce_sync_merge_required(repo, candidate, update)
-    enforce_branch_log_dropped(repo, config, update)
+    enforce_branch_log_target_invariant(repo, config, update)
 
     required = required_target_refs(policy, candidate.rule["source"])
     if len(required) <= 1:
@@ -702,12 +702,12 @@ def enforce_sync_merge_required(repo: Path, candidate: SourceCandidate, update: 
     )
 
 
-def enforce_branch_log_dropped(repo: Path, config: dict[str, Any], update: RefUpdate) -> None:
+def enforce_branch_log_target_invariant(repo: Path, config: dict[str, Any], update: RefUpdate) -> None:
     settings = branch_log_settings(config)
     if not branch_log_path_changed(repo, update.old, update.new, settings.path):
         return
     raise HookReject(
-        "BRANCH_LOG_MUST_BE_DROPPED",
+        "BRANCH_LOG_TARGET_CHANGED",
         ref=update.ref,
         path=settings.path,
         old=short_sha(update.old),

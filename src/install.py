@@ -18,7 +18,7 @@ VALID_SCOPES = ("worktree", "local", "global")
 DEFAULT_CONFIG = {
     "branch_logs": {
         "path": ".branch_logs/",
-        "required": False,
+        "force_required": True,
     },
     "pre_push": {
         "auto_push_missing_tags": True,
