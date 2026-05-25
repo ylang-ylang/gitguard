@@ -79,7 +79,12 @@ def parse_gitgraph(block: str) -> ParsedGraph:
 
         command = tokens[0]
         if command == "commit":
-            if current_branch != "main" and current_branch in checked_out_branches:
+            attrs = _parse_attrs(tokens[1:], line_number)
+            if (
+                current_branch != "main"
+                and current_branch in checked_out_branches
+                and not is_branch_history_marker_commit(attrs.get("id", ""))
+            ):
                 _append_unique(direct_commit_branches, current_branch)
             continue
         if command == "branch":
@@ -293,6 +298,10 @@ def delivery_merge_rules(rules: list[MergeRule]) -> list[MergeRule]:
 
 def merge_rule_id(source: str, target: str) -> str:
     return f"{source} to {target}"
+
+
+def is_branch_history_marker_commit(commit_id: str) -> bool:
+    return "branch" in commit_id.split()
 
 
 def required_targets(rules: list[MergeRule]) -> list[dict[str, Any]]:
