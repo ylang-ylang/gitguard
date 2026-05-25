@@ -24,6 +24,10 @@ DEFAULT_CONFIG = {
     "runtime": {
         "auto_sync": True,
     },
+    "submodules": {
+        "allowed_branches": ["main", "case/*/*"],
+        "main_guard": True,
+    },
     "worktree": {
         "reject_branch_creation_in_linked_worktree": True,
     },
@@ -54,6 +58,20 @@ class PushUpdate:
     local_sha: str
     remote_ref: str
     remote_sha: str
+
+
+@dataclass(frozen=True)
+class SubmoduleGitlink:
+    path: str
+    sha: str
+
+
+@dataclass(frozen=True)
+class SubmoduleBranchTip:
+    pattern: str
+    branch: str
+    ref: str
+    sha: str
 
 
 @dataclass(frozen=True)
@@ -190,19 +208,27 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def default_config() -> dict[str, Any]:
-    return {
-        section: dict(values)
-        for section, values in DEFAULT_CONFIG.items()
-    }
+    return merge_defaults({}, DEFAULT_CONFIG)
 
 
 def merge_config(config: dict[str, Any]) -> dict[str, Any]:
-    merged = default_config()
+    merged = merge_defaults({}, DEFAULT_CONFIG)
     for key, value in config.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key].update(value)
+            merged[key] = merge_defaults(value, merged[key])
         else:
             merged[key] = value
+    return merged
+
+
+def merge_defaults(config: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(config)
+    for key, default_value in defaults.items():
+        current_value = merged.get(key)
+        if isinstance(current_value, dict) and isinstance(default_value, dict):
+            merged[key] = merge_defaults(current_value, default_value)
+        elif key not in merged:
+            merged[key] = merge_defaults({}, default_value) if isinstance(default_value, dict) else default_value
     return merged
 
 
@@ -216,6 +242,24 @@ def config_bool(config: dict[str, Any], section: str, key: str) -> bool:
     if not isinstance(value, bool):
         raise HookReject("CONFIG_INVALID", key=f"{section}.{key}", expected="boolean")
     return value
+
+
+def config_string_list(config: dict[str, Any], section: str, key: str) -> list[str]:
+    section_value = config.get(section, {})
+    if not isinstance(section_value, dict):
+        raise HookReject("CONFIG_INVALID", key=section, expected="object")
+
+    default_value = DEFAULT_CONFIG[section][key]
+    value = section_value.get(key, default_value)
+    if not isinstance(value, list) or not value:
+        raise HookReject("CONFIG_INVALID", key=f"{section}.{key}", expected="non-empty string list")
+
+    items: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item or item != item.strip():
+            raise HookReject("CONFIG_INVALID", key=f"{section}.{key}", expected="non-empty string list")
+        items.append(item)
+    return items
 
 
 def branch_log_settings(config: dict[str, Any]) -> BranchLogSettings:
@@ -373,6 +417,7 @@ def auto_push_missing_tags(repo: Path, remote: str, display_remote: str, tags: l
 
 def validate_prepared(repo: Path, policy: dict[str, Any], config: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
     enforce_linked_worktree_branch_creation_guard(repo, config, updates)
+    enforce_submodule_main_guard(repo, config, updates)
     validate_branch_rename_target(policy, updates)
 
     state = load_state(state_path)
@@ -521,6 +566,158 @@ def is_linked_worktree(repo: Path) -> bool:
     git_dir = git(repo, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip()
     common_dir = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
     return git_dir != common_dir
+
+
+def enforce_submodule_main_guard(repo: Path, config: dict[str, Any], updates: list[RefUpdate]) -> None:
+    if not config_bool(config, "submodules", "main_guard"):
+        return
+    allowed_branches = config_string_list(config, "submodules", "allowed_branches")
+
+    checked: set[tuple[str, str]] = set()
+    for update in updates:
+        if update.new == ZERO or not update.ref.startswith("refs/heads/"):
+            continue
+        for gitlink in submodule_gitlinks(repo, update.new):
+            key = (gitlink.path, gitlink.sha)
+            if key in checked:
+                continue
+            checked.add(key)
+            validate_submodule_main_guard(repo, gitlink, allowed_branches)
+
+
+def submodule_gitlinks(repo: Path, commit: str) -> list[SubmoduleGitlink]:
+    result = git(repo, "ls-tree", "-r", "-z", commit)
+    gitlinks: list[SubmoduleGitlink] = []
+    for raw_entry in result.stdout.split("\0"):
+        if not raw_entry:
+            continue
+        meta, path = raw_entry.split("\t", 1)
+        parts = meta.split()
+        if len(parts) == 3 and parts[0] == "160000" and parts[1] == "commit":
+            gitlinks.append(SubmoduleGitlink(path=path, sha=parts[2]))
+    return gitlinks
+
+
+def validate_submodule_main_guard(repo: Path, gitlink: SubmoduleGitlink, allowed_branches: list[str]) -> None:
+    submodule = repo / gitlink.path
+    if not is_git_worktree(submodule):
+        raise HookReject("SUBMODULE_REPO_MISSING", path=gitlink.path, commit=short_sha(gitlink.sha))
+
+    if not commit_exists(submodule, gitlink.sha):
+        raise HookReject("SUBMODULE_COMMIT_MISSING", path=gitlink.path, commit=short_sha(gitlink.sha))
+
+    remote_tips = submodule_branch_tips(submodule, "refs/remotes/origin", allowed_branches)
+    local_tips = submodule_branch_tips(submodule, "refs/heads", allowed_branches)
+    if not remote_tips and not local_tips:
+        raise HookReject(
+            "SUBMODULE_ALLOWED_BRANCH_REF_MISSING",
+            path=gitlink.path,
+            commit=short_sha(gitlink.sha),
+            allowed_branches=allowed_branches,
+        )
+
+    remote_match = first_containing_branch_tip(submodule, gitlink.sha, remote_tips)
+    if remote_match is not None:
+        tip, exact = remote_match
+        if exact:
+            return
+        warn(
+            submodule_remote_behind_warning_code(tip),
+            path=gitlink.path,
+            commit=short_sha(gitlink.sha),
+            branch=tip.branch,
+            remote_ref=tip.ref,
+            remote_sha=short_sha(tip.sha),
+        )
+        return
+
+    local_match = first_containing_branch_tip(submodule, gitlink.sha, local_tips)
+    if local_match is not None:
+        tip, _ = local_match
+        warn(
+            submodule_local_branch_warning_code(tip),
+            path=gitlink.path,
+            commit=short_sha(gitlink.sha),
+            branch=tip.branch,
+            local_ref=tip.ref,
+            local_sha=short_sha(tip.sha),
+        )
+        return
+
+    raise HookReject(
+        "SUBMODULE_COMMIT_NOT_ALLOWED",
+        path=gitlink.path,
+        commit=short_sha(gitlink.sha),
+        allowed_branches=allowed_branches,
+        remote_refs=[tip.ref for tip in remote_tips],
+        local_refs=[tip.ref for tip in local_tips],
+    )
+
+
+def submodule_branch_tips(repo: Path, namespace: str, allowed_branches: list[str]) -> list[SubmoduleBranchTip]:
+    tips: list[SubmoduleBranchTip] = []
+    ref_items: list[tuple[str, str, str]] = []
+    output = git(repo, "for-each-ref", "--format=%(refname) %(objectname)", namespace).stdout
+    for line in output.splitlines():
+        ref, sha = line.split(" ", 1)
+        prefix = f"{namespace}/"
+        if not ref.startswith(prefix):
+            continue
+        branch = ref.removeprefix(prefix)
+        ref_items.append((branch, ref, sha))
+
+    seen_refs: set[str] = set()
+    for pattern in allowed_branches:
+        for branch, ref, sha in ref_items:
+            if ref in seen_refs or not matches_ref_pattern(pattern, branch):
+                continue
+            seen_refs.add(ref)
+            tips.append(SubmoduleBranchTip(pattern=pattern, branch=branch, ref=ref, sha=sha))
+    return tips
+
+
+def first_containing_branch_tip(
+    repo: Path,
+    commit: str,
+    tips: list[SubmoduleBranchTip],
+) -> tuple[SubmoduleBranchTip, bool] | None:
+    for tip in tips:
+        if commit == tip.sha:
+            return tip, True
+        if is_ancestor(repo, commit, tip.sha):
+            return tip, False
+    return None
+
+
+def submodule_remote_behind_warning_code(tip: SubmoduleBranchTip) -> str:
+    if tip.pattern == "main" and tip.branch == "main":
+        return "SUBMODULE_BEHIND_ORIGIN_MAIN"
+    return "SUBMODULE_BEHIND_ALLOWED_REMOTE_BRANCH"
+
+
+def submodule_local_branch_warning_code(tip: SubmoduleBranchTip) -> str:
+    if tip.pattern == "main" and tip.branch == "main":
+        return "SUBMODULE_NOT_ON_ORIGIN_MAIN_BUT_ON_LOCAL_MAIN"
+    return "SUBMODULE_NOT_ON_ALLOWED_REMOTE_BRANCH_BUT_ON_LOCAL_BRANCH"
+
+
+def is_git_worktree(path: Path) -> bool:
+    return git(path, "rev-parse", "--show-toplevel", check=False).returncode == 0
+
+
+def commit_exists(repo: Path, commit: str) -> bool:
+    return git(repo, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode == 0
+
+
+def optional_rev_parse(repo: Path, ref: str) -> str | None:
+    result = git(repo, "rev-parse", "--verify", ref, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def warn(code: str, **context: Any) -> None:
+    print(f"git-guard: {format_reject(code, context)}", file=sys.stderr)
 
 
 def is_allowed_branch_ref(policy: dict[str, Any], ref: str) -> bool:

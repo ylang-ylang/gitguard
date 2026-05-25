@@ -55,6 +55,7 @@ class PolicyHookTestBase:
         self.mark_rejection_tests_start()
         self.run_rejection_tests()
         self.checkout_final_branch()
+        self.assert_submodule_main_guard()
         self.assert_linked_worktree_branch_creation_guard()
 
         print(f"PASS {self.name}: policy hook test repo is {self.repo}")
@@ -123,6 +124,10 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: config should enable missing tag auto-push by default")
         if config.get("runtime", {}).get("auto_sync") is not True:
             raise AssertionError(f"{self.name}: config should enable runtime auto-sync by default")
+        if config.get("submodules", {}).get("allowed_branches") != ["main", "case/*/*"]:
+            raise AssertionError(f"{self.name}: config should default submodule allowed branches to main and case/*/*")
+        if config.get("submodules", {}).get("main_guard") is not True:
+            raise AssertionError(f"{self.name}: config should enable submodule main guard by default")
         for hook_name in ["reference-transaction", "pre-push", "pre-commit"]:
             hook_text = (self.repo / ".git-guard" / "hooks" / hook_name).read_text(encoding="utf-8")
             if "git_guard_runtime_sync" not in hook_text:
@@ -181,6 +186,10 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: reinstall should preserve/add pre_push defaults")
         if updated.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
             raise AssertionError(f"{self.name}: reinstall should preserve/add worktree defaults")
+        if updated.get("submodules", {}).get("allowed_branches") != ["main", "case/*/*"]:
+            raise AssertionError(f"{self.name}: reinstall should preserve/add submodule allowed branch defaults")
+        if updated.get("submodules", {}).get("main_guard") is not True:
+            raise AssertionError(f"{self.name}: reinstall should preserve/add submodule main guard defaults")
 
         config.setdefault("runtime", {})["auto_sync"] = True
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -420,6 +429,9 @@ class PolicyHookTestBase:
             "pre_push": {
                 "auto_push_missing_tags": True,
             },
+            "submodules": {
+                "main_guard": False,
+            },
             "worktree": {
                 "reject_branch_creation_in_linked_worktree": False,
             },
@@ -439,6 +451,183 @@ class PolicyHookTestBase:
             )
         if ref_exists(linked_repo, f"refs/heads/{disabled_branch}"):
             raise AssertionError(f"{self.name}: config-disabled invalid branch was created: {disabled_branch}")
+
+    def assert_submodule_main_guard(self) -> None:
+        target_branch = self.prepare_submodule_main_guard_branch()
+        self.git("checkout", target_branch)
+        submodule_remote = self.create_submodule_remote()
+        self.git("-c", "protocol.file.allow=always", "submodule", "add", str(submodule_remote), "modules/lib")
+        result = self.git("commit", "-m", "add submodule at origin main tip")
+        self.assert_output_not_contains(result, "SUBMODULE_")
+
+        submodule = self.repo / "modules" / "lib"
+        origin_base = self.git_in(submodule, "rev-parse", "--verify", "origin/main~1").stdout.strip()
+        self.git_in(submodule, "checkout", "--detach", origin_base)
+        self.git("add", "modules/lib")
+        result = self.git("commit", "-m", "pin submodule behind origin main")
+        self.assert_output_contains(result, "SUBMODULE_BEHIND_ORIGIN_MAIN")
+
+        self.git_in(submodule, "checkout", "main")
+        self.write_repo_file(submodule, "local-main.txt", "local main only\n")
+        self.git_in(submodule, "add", "local-main.txt")
+        self.git_in(submodule, "commit", "-m", "local main only")
+        self.git("add", "modules/lib")
+        result = self.git("commit", "-m", "pin submodule to local main")
+        self.assert_output_contains(result, "SUBMODULE_NOT_ON_ORIGIN_MAIN_BUT_ON_LOCAL_MAIN")
+
+        case_base = self.git_in(submodule, "rev-parse", "--verify", "origin/case/allowed/topic~1").stdout.strip()
+        self.git_in(submodule, "checkout", "--detach", case_base)
+        self.git("add", "modules/lib")
+        result = self.git("commit", "-m", "pin submodule behind allowed case branch")
+        self.assert_output_contains(result, "SUBMODULE_BEHIND_ALLOWED_REMOTE_BRANCH")
+        self.assert_output_contains(result, "branch=case/allowed/topic")
+
+        self.git_in(submodule, "checkout", "-b", "case/local/topic", "origin/case/allowed/topic")
+        self.write_repo_file(submodule, "local-case.txt", "local case only\n")
+        self.git_in(submodule, "add", "local-case.txt")
+        self.git_in(submodule, "commit", "-m", "local case only")
+        self.git("add", "modules/lib")
+        result = self.git("commit", "-m", "pin submodule to local case branch")
+        self.assert_output_contains(result, "SUBMODULE_NOT_ON_ALLOWED_REMOTE_BRANCH_BUT_ON_LOCAL_BRANCH")
+        self.assert_output_contains(result, "branch=case/local/topic")
+
+        allowed_parent = self.rev_parse(target_branch)
+        self.git_in(submodule, "checkout", "-b", "side", "origin/main")
+        self.write_repo_file(submodule, "side.txt", "side only\n")
+        self.git_in(submodule, "add", "side.txt")
+        self.git_in(submodule, "commit", "-m", "side only")
+        self.git("add", "modules/lib")
+        self.expect_rejected(
+            ["commit", "-m", "pin submodule to side branch"],
+            "SUBMODULE_COMMIT_NOT_ALLOWED",
+            cleanup=lambda: self.reset_parent_and_submodule(allowed_parent, submodule),
+        )
+
+        self.set_submodule_main_guard(False)
+        self.git_in(submodule, "checkout", "side")
+        self.git("add", "modules/lib")
+        result = self.git("commit", "-m", "submodule guard disabled allows side")
+        self.assert_output_not_contains(result, "SUBMODULE_COMMIT_NOT_ALLOWED")
+        self.git_no_hooks("reset", "--hard", allowed_parent)
+        self.set_submodule_main_guard(True)
+        self.git_in(submodule, "checkout", "main")
+
+        self.set_submodule_main_guard_legacy_shape()
+        self.expect_rejected(
+            ["commit", "--allow-empty", "-m", "legacy submodule main guard shape is invalid"],
+            "CONFIG_INVALID",
+        )
+        self.set_submodule_main_guard(True)
+        self.set_submodule_allowed_branches("main")
+        self.expect_rejected(
+            ["commit", "--allow-empty", "-m", "submodule allowed branches scalar is invalid"],
+            "CONFIG_INVALID",
+        )
+        self.set_submodule_allowed_branches(["main", "case/*/*"])
+
+        shutil.rmtree(submodule)
+        self.write_file("missing-submodule-check.txt", "missing submodule check\n")
+        self.git("add", "missing-submodule-check.txt")
+        self.expect_rejected(
+            ["commit", "-m", "missing submodule is rejected"],
+            "SUBMODULE_REPO_MISSING",
+            cleanup=lambda: self.reset_parent_and_init_submodule(allowed_parent),
+        )
+
+    def prepare_submodule_main_guard_branch(self) -> str:
+        preferred_names = ["feat/*", "infra/*", "release/*", "hotfix/*"]
+        direct_names = [item["name"] for item in self.policy.get("direct_commit_refs", [])]
+        ordered_names = [name for name in preferred_names if name in direct_names]
+        ordered_names.extend(name for name in direct_names if name not in ordered_names and name != "main")
+
+        for name in ordered_names:
+            if "*" in name:
+                edge = next((item for item in self.policy.get("branch_from", []) if item.get("target") == name), None)
+                if not edge:
+                    continue
+                branch = name.replace("*", "submodule-main-guard")
+                self.create_branch(branch, edge["source"])
+                return branch
+
+            self.git("checkout", name)
+            return name
+
+        raise AssertionError(f"{self.name}: cannot find a direct-commit branch for submodule main guard tests")
+
+    def create_submodule_remote(self) -> Path:
+        remote = self.work_root.parent / f"{self.name}-submodule-remote"
+        if remote.exists():
+            shutil.rmtree(remote)
+        remote.mkdir(parents=True)
+        self.git_in(remote, "init", "-b", "main")
+        self.git_in(remote, "config", "user.name", "Policy Hook Test")
+        self.git_in(remote, "config", "user.email", "policy-hook-test@example.invalid")
+        self.write_repo_file(remote, "lib.txt", "base\n")
+        self.git_in(remote, "add", "lib.txt")
+        self.git_in(remote, "commit", "-m", "submodule base")
+        self.write_repo_file(remote, "lib.txt", "tip\n")
+        self.git_in(remote, "add", "lib.txt")
+        self.git_in(remote, "commit", "-m", "submodule tip")
+        self.git_in(remote, "checkout", "-b", "case/allowed/topic", "main")
+        self.write_repo_file(remote, "case.txt", "case base\n")
+        self.git_in(remote, "add", "case.txt")
+        self.git_in(remote, "commit", "-m", "submodule case base")
+        self.write_repo_file(remote, "case.txt", "case tip\n")
+        self.git_in(remote, "add", "case.txt")
+        self.git_in(remote, "commit", "-m", "submodule case tip")
+        self.git_in(remote, "checkout", "main")
+        return remote
+
+    def set_submodule_allowed_branches(self, allowed_branches: object) -> None:
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config.setdefault("submodules", {})["allowed_branches"] = allowed_branches
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def set_submodule_main_guard(self, enabled: bool) -> None:
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config.setdefault("submodules", {})["main_guard"] = enabled
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def set_submodule_main_guard_legacy_shape(self) -> None:
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config.setdefault("submodules", {})["main_guard"] = {"enabled": True}
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def reset_parent_and_submodule(self, parent_ref: str, submodule: Path) -> None:
+        self.git_no_hooks("reset", "--hard", parent_ref)
+        if submodule.exists():
+            self.git_in(submodule, "checkout", "main", check=False)
+
+    def reset_parent_and_init_submodule(self, parent_ref: str) -> None:
+        self.git_no_hooks("reset", "--hard", parent_ref)
+        self.git("-c", "protocol.file.allow=always", "submodule", "update", "--init", "modules/lib")
+
+    def write_repo_file(self, repo: Path, filename: str, content: str) -> None:
+        path = repo / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    def git_in(self, repo: Path, *args: str, check: bool = True) -> CommandResult:
+        return git_raw(repo, *args, check=check)
+
+    def assert_output_contains(self, result: CommandResult, expected: str) -> None:
+        combined = result.stdout + result.stderr
+        if expected not in combined:
+            raise AssertionError(
+                f"{self.name}: expected command output to contain {expected!r}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+
+    def assert_output_not_contains(self, result: CommandResult, unexpected: str) -> None:
+        combined = result.stdout + result.stderr
+        if unexpected in combined:
+            raise AssertionError(
+                f"{self.name}: command output should not contain {unexpected!r}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
 
     def expected_policy_hint_path(self) -> str:
         return str((self.repo / ".git-guard" / "contribution.md").resolve())

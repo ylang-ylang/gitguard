@@ -5,6 +5,13 @@
   "runtime": {
     "auto_sync": false
   },
+  "submodules": {
+    "allowed_branches": [
+      "main",
+      "case/*/*"
+    ],
+    "main_guard": true
+  },
   "worktree": {
     "reject_branch_creation_in_linked_worktree": true
   }

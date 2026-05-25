@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -13,11 +14,19 @@ from typing import Any
 
 ZERO = "0" * 40
 DEFAULT_CONFIG = {
+    "branch_logs": {
+        "path": ".branch_logs/",
+        "force_required": True,
+    },
     "pre_push": {
         "auto_push_missing_tags": True,
     },
     "runtime": {
         "auto_sync": True,
+    },
+    "submodules": {
+        "allowed_branches": ["main", "case/*/*"],
+        "main_guard": True,
     },
     "worktree": {
         "reject_branch_creation_in_linked_worktree": True,
@@ -52,10 +61,30 @@ class PushUpdate:
 
 
 @dataclass(frozen=True)
+class SubmoduleGitlink:
+    path: str
+    sha: str
+
+
+@dataclass(frozen=True)
+class SubmoduleBranchTip:
+    pattern: str
+    branch: str
+    ref: str
+    sha: str
+
+
+@dataclass(frozen=True)
 class LocalPolicyTag:
     ref: str
     object_sha: str
     target_sha: str
+
+
+@dataclass(frozen=True)
+class BranchLogSettings:
+    path: str
+    force_required: bool
 
 
 class HookReject(RuntimeError):
@@ -110,6 +139,12 @@ def main() -> int:
             validate_pre_push(repo, policy, config, sys.argv[2], sys.argv[3], read_push_updates(sys.stdin))
             return 0
 
+        if command == "pre-commit":
+            if len(sys.argv) != 2:
+                raise HookReject("HOOK_PRE_COMMIT_USAGE", argv=sys.argv[1:])
+            validate_pre_commit(repo, policy, config)
+            return 0
+
         if len(sys.argv) != 2:
             raise HookReject("HOOK_REFERENCE_TRANSACTION_USAGE", argv=sys.argv[1:])
 
@@ -129,8 +164,8 @@ def main() -> int:
         print(f"git-guard: {exc}", file=sys.stderr)
         if exc.code == "WORKTREE_BRANCH_CREATION_NOT_ALLOWED":
             print(
-                "git-guard: linked worktrees should keep one branch per directory; "
-                "create a new worktree directory for this branch from the main worktree.",
+                "git-guard: branch creation is blocked only in this linked worktree; "
+                "create the branch by adding a new worktree directory from the main worktree instead.",
                 file=sys.stderr,
             )
         source_path = policy_hint_path(repo, policy)
@@ -173,19 +208,27 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def default_config() -> dict[str, Any]:
-    return {
-        section: dict(values)
-        for section, values in DEFAULT_CONFIG.items()
-    }
+    return merge_defaults({}, DEFAULT_CONFIG)
 
 
 def merge_config(config: dict[str, Any]) -> dict[str, Any]:
-    merged = default_config()
+    merged = merge_defaults({}, DEFAULT_CONFIG)
     for key, value in config.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key].update(value)
+            merged[key] = merge_defaults(value, merged[key])
         else:
             merged[key] = value
+    return merged
+
+
+def merge_defaults(config: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(config)
+    for key, default_value in defaults.items():
+        current_value = merged.get(key)
+        if isinstance(current_value, dict) and isinstance(default_value, dict):
+            merged[key] = merge_defaults(current_value, default_value)
+        elif key not in merged:
+            merged[key] = merge_defaults({}, default_value) if isinstance(default_value, dict) else default_value
     return merged
 
 
@@ -199,6 +242,83 @@ def config_bool(config: dict[str, Any], section: str, key: str) -> bool:
     if not isinstance(value, bool):
         raise HookReject("CONFIG_INVALID", key=f"{section}.{key}", expected="boolean")
     return value
+
+
+def config_string_list(config: dict[str, Any], section: str, key: str) -> list[str]:
+    section_value = config.get(section, {})
+    if not isinstance(section_value, dict):
+        raise HookReject("CONFIG_INVALID", key=section, expected="object")
+
+    default_value = DEFAULT_CONFIG[section][key]
+    value = section_value.get(key, default_value)
+    if not isinstance(value, list) or not value:
+        raise HookReject("CONFIG_INVALID", key=f"{section}.{key}", expected="non-empty string list")
+
+    items: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item or item != item.strip():
+            raise HookReject("CONFIG_INVALID", key=f"{section}.{key}", expected="non-empty string list")
+        items.append(item)
+    return items
+
+
+def branch_log_settings(config: dict[str, Any]) -> BranchLogSettings:
+    section = config.get("branch_logs", {})
+    if not isinstance(section, dict):
+        raise HookReject("CONFIG_INVALID", key="branch_logs", expected="object")
+
+    raw_path = section.get("path", DEFAULT_CONFIG["branch_logs"]["path"])
+    if not isinstance(raw_path, str):
+        raise HookReject("CONFIG_INVALID", key="branch_logs.path", expected="string")
+
+    path = normalize_branch_log_path(raw_path)
+    force_required = section.get("force_required", DEFAULT_CONFIG["branch_logs"]["force_required"])
+    if not isinstance(force_required, bool):
+        raise HookReject("CONFIG_INVALID", key="branch_logs.force_required", expected="boolean")
+
+    return BranchLogSettings(path=path, force_required=force_required)
+
+
+def normalize_branch_log_path(raw_path: str) -> str:
+    path = raw_path.strip().replace("\\", "/")
+    if not path:
+        raise HookReject("CONFIG_INVALID", key="branch_logs.path", expected="non-empty repo-relative path")
+    if path.startswith("/") or path == "." or path.startswith("../") or "/../" in path or path.endswith("/.."):
+        raise HookReject("CONFIG_INVALID", key="branch_logs.path", expected="repo-relative path without ..")
+    if path == ".git" or path.startswith(".git/"):
+        raise HookReject("CONFIG_INVALID", key="branch_logs.path", expected="path outside .git")
+    return path
+
+
+def validate_pre_commit(repo: Path, policy: dict[str, Any], config: dict[str, Any]) -> None:
+    settings = branch_log_settings(config)
+    untracked = branch_log_untracked_files(repo, settings.path)
+    if untracked:
+        raise HookReject(
+            "BRANCH_LOG_UNTRACKED",
+            path=settings.path,
+            files=untracked[:5],
+        )
+
+    unstaged = branch_log_unstaged_files(repo, settings.path)
+    if unstaged:
+        raise HookReject(
+            "BRANCH_LOG_UNSTAGED",
+            path=settings.path,
+            files=unstaged[:5],
+        )
+
+    if not settings.force_required:
+        return
+
+    ref = current_branch_ref(repo)
+    if ref is None:
+        return
+    if not is_allowed_branch_ref(policy, ref):
+        return
+    if branch_log_tracked_in_index(repo, settings.path):
+        return
+    raise HookReject("BRANCH_LOG_REQUIRED", ref=ref, path=settings.path)
 
 
 def validate_pre_push(
@@ -297,6 +417,8 @@ def auto_push_missing_tags(repo: Path, remote: str, display_remote: str, tags: l
 
 def validate_prepared(repo: Path, policy: dict[str, Any], config: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
     enforce_linked_worktree_branch_creation_guard(repo, config, updates)
+    enforce_submodule_main_guard(repo, config, updates)
+    validate_branch_rename_target(policy, updates)
 
     state = load_state(state_path)
     pending = state.get("pending", {})
@@ -318,20 +440,113 @@ def validate_prepared(repo: Path, policy: dict[str, Any], config: dict[str, Any]
             continue
 
         if update.ref.startswith("refs/heads/") and update.old == ZERO:
-            validate_branch_creation_or_replacement(repo, policy, proposed, update)
+            validate_branch_creation_or_replacement(repo, policy, config, proposed, update)
             continue
 
         if update.ref.startswith("refs/heads/") and update.ref not in set(policy.get("protected_refs", [])):
-            validate_managed_branch_update(repo, policy, update)
+            validate_managed_branch_update(repo, policy, config, update)
 
         if update.ref in set(policy.get("protected_refs", [])):
-            validate_protected_target_update(repo, policy, proposed, update)
+            validate_protected_target_update(repo, policy, config, proposed, update)
 
 
 def validate_branch_name(policy: dict[str, Any], ref: str) -> None:
     if is_allowed_branch_ref(policy, ref):
         return
     raise HookReject("BRANCH_NAME_NOT_ALLOWED", ref=ref)
+
+
+def validate_branch_rename_target(policy: dict[str, Any], updates: list[RefUpdate]) -> None:
+    deleted_heads = [
+        update
+        for update in updates
+        if update.ref.startswith("refs/heads/") and update.old != ZERO and update.new == ZERO
+    ]
+    if not deleted_heads:
+        return
+
+    if not any(update.ref == "HEAD" and update.old != ZERO and update.new == ZERO for update in updates):
+        return
+
+    target_ref = branch_rename_target_ref_from_parent()
+    if not target_ref:
+        raise HookReject("BRANCH_RENAME_TARGET_UNOBSERVABLE", ref=deleted_heads[0].ref)
+    validate_branch_name(policy, target_ref)
+
+
+def branch_rename_target_ref_from_parent() -> str | None:
+    argv = parent_process_argv()
+    if not argv:
+        return None
+    target = branch_rename_target_from_argv(argv)
+    if not target:
+        return None
+    if target.startswith("refs/heads/"):
+        return target
+    return f"refs/heads/{target}"
+
+
+def parent_process_argv() -> list[str]:
+    parent_pid = os.getppid()
+    argv = proc_cmdline_argv(parent_pid)
+    if argv:
+        return argv
+    return ps_command_argv(parent_pid)
+
+
+def proc_cmdline_argv(pid: int) -> list[str]:
+    proc_path = Path("/proc") / str(pid) / "cmdline"
+    try:
+        raw = proc_path.read_bytes()
+    except OSError:
+        return []
+    return [part.decode(errors="replace") for part in raw.split(b"\0") if part]
+
+
+def ps_command_argv(pid: int) -> list[str]:
+    result = subprocess.run(
+        ["ps", "-o", "command=", "-p", str(pid)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        return shlex.split(result.stdout.strip())
+    except ValueError:
+        return []
+
+
+def branch_rename_target_from_argv(argv: list[str]) -> str | None:
+    try:
+        branch_index = next(index for index, item in enumerate(argv) if Path(item).name == "branch")
+    except StopIteration:
+        return None
+
+    args = argv[branch_index + 1 :]
+    if not any(arg in {"-m", "-M", "--move", "--Move"} for arg in args):
+        return None
+
+    positional: list[str] = []
+    end_of_options = False
+    for arg in args:
+        if end_of_options:
+            positional.append(arg)
+            continue
+        if arg == "--":
+            end_of_options = True
+            continue
+        if arg in {"-m", "-M", "--move", "--Move"}:
+            continue
+        if arg.startswith("-"):
+            continue
+        positional.append(arg)
+
+    if not positional:
+        return None
+    return positional[-1]
 
 
 def enforce_linked_worktree_branch_creation_guard(repo: Path, config: dict[str, Any], updates: list[RefUpdate]) -> None:
@@ -353,6 +568,158 @@ def is_linked_worktree(repo: Path) -> bool:
     return git_dir != common_dir
 
 
+def enforce_submodule_main_guard(repo: Path, config: dict[str, Any], updates: list[RefUpdate]) -> None:
+    if not config_bool(config, "submodules", "main_guard"):
+        return
+    allowed_branches = config_string_list(config, "submodules", "allowed_branches")
+
+    checked: set[tuple[str, str]] = set()
+    for update in updates:
+        if update.new == ZERO or not update.ref.startswith("refs/heads/"):
+            continue
+        for gitlink in submodule_gitlinks(repo, update.new):
+            key = (gitlink.path, gitlink.sha)
+            if key in checked:
+                continue
+            checked.add(key)
+            validate_submodule_main_guard(repo, gitlink, allowed_branches)
+
+
+def submodule_gitlinks(repo: Path, commit: str) -> list[SubmoduleGitlink]:
+    result = git(repo, "ls-tree", "-r", "-z", commit)
+    gitlinks: list[SubmoduleGitlink] = []
+    for raw_entry in result.stdout.split("\0"):
+        if not raw_entry:
+            continue
+        meta, path = raw_entry.split("\t", 1)
+        parts = meta.split()
+        if len(parts) == 3 and parts[0] == "160000" and parts[1] == "commit":
+            gitlinks.append(SubmoduleGitlink(path=path, sha=parts[2]))
+    return gitlinks
+
+
+def validate_submodule_main_guard(repo: Path, gitlink: SubmoduleGitlink, allowed_branches: list[str]) -> None:
+    submodule = repo / gitlink.path
+    if not is_git_worktree(submodule):
+        raise HookReject("SUBMODULE_REPO_MISSING", path=gitlink.path, commit=short_sha(gitlink.sha))
+
+    if not commit_exists(submodule, gitlink.sha):
+        raise HookReject("SUBMODULE_COMMIT_MISSING", path=gitlink.path, commit=short_sha(gitlink.sha))
+
+    remote_tips = submodule_branch_tips(submodule, "refs/remotes/origin", allowed_branches)
+    local_tips = submodule_branch_tips(submodule, "refs/heads", allowed_branches)
+    if not remote_tips and not local_tips:
+        raise HookReject(
+            "SUBMODULE_ALLOWED_BRANCH_REF_MISSING",
+            path=gitlink.path,
+            commit=short_sha(gitlink.sha),
+            allowed_branches=allowed_branches,
+        )
+
+    remote_match = first_containing_branch_tip(submodule, gitlink.sha, remote_tips)
+    if remote_match is not None:
+        tip, exact = remote_match
+        if exact:
+            return
+        warn(
+            submodule_remote_behind_warning_code(tip),
+            path=gitlink.path,
+            commit=short_sha(gitlink.sha),
+            branch=tip.branch,
+            remote_ref=tip.ref,
+            remote_sha=short_sha(tip.sha),
+        )
+        return
+
+    local_match = first_containing_branch_tip(submodule, gitlink.sha, local_tips)
+    if local_match is not None:
+        tip, _ = local_match
+        warn(
+            submodule_local_branch_warning_code(tip),
+            path=gitlink.path,
+            commit=short_sha(gitlink.sha),
+            branch=tip.branch,
+            local_ref=tip.ref,
+            local_sha=short_sha(tip.sha),
+        )
+        return
+
+    raise HookReject(
+        "SUBMODULE_COMMIT_NOT_ALLOWED",
+        path=gitlink.path,
+        commit=short_sha(gitlink.sha),
+        allowed_branches=allowed_branches,
+        remote_refs=[tip.ref for tip in remote_tips],
+        local_refs=[tip.ref for tip in local_tips],
+    )
+
+
+def submodule_branch_tips(repo: Path, namespace: str, allowed_branches: list[str]) -> list[SubmoduleBranchTip]:
+    tips: list[SubmoduleBranchTip] = []
+    ref_items: list[tuple[str, str, str]] = []
+    output = git(repo, "for-each-ref", "--format=%(refname) %(objectname)", namespace).stdout
+    for line in output.splitlines():
+        ref, sha = line.split(" ", 1)
+        prefix = f"{namespace}/"
+        if not ref.startswith(prefix):
+            continue
+        branch = ref.removeprefix(prefix)
+        ref_items.append((branch, ref, sha))
+
+    seen_refs: set[str] = set()
+    for pattern in allowed_branches:
+        for branch, ref, sha in ref_items:
+            if ref in seen_refs or not matches_ref_pattern(pattern, branch):
+                continue
+            seen_refs.add(ref)
+            tips.append(SubmoduleBranchTip(pattern=pattern, branch=branch, ref=ref, sha=sha))
+    return tips
+
+
+def first_containing_branch_tip(
+    repo: Path,
+    commit: str,
+    tips: list[SubmoduleBranchTip],
+) -> tuple[SubmoduleBranchTip, bool] | None:
+    for tip in tips:
+        if commit == tip.sha:
+            return tip, True
+        if is_ancestor(repo, commit, tip.sha):
+            return tip, False
+    return None
+
+
+def submodule_remote_behind_warning_code(tip: SubmoduleBranchTip) -> str:
+    if tip.pattern == "main" and tip.branch == "main":
+        return "SUBMODULE_BEHIND_ORIGIN_MAIN"
+    return "SUBMODULE_BEHIND_ALLOWED_REMOTE_BRANCH"
+
+
+def submodule_local_branch_warning_code(tip: SubmoduleBranchTip) -> str:
+    if tip.pattern == "main" and tip.branch == "main":
+        return "SUBMODULE_NOT_ON_ORIGIN_MAIN_BUT_ON_LOCAL_MAIN"
+    return "SUBMODULE_NOT_ON_ALLOWED_REMOTE_BRANCH_BUT_ON_LOCAL_BRANCH"
+
+
+def is_git_worktree(path: Path) -> bool:
+    return git(path, "rev-parse", "--show-toplevel", check=False).returncode == 0
+
+
+def commit_exists(repo: Path, commit: str) -> bool:
+    return git(repo, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode == 0
+
+
+def optional_rev_parse(repo: Path, ref: str) -> str | None:
+    result = git(repo, "rev-parse", "--verify", ref, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def warn(code: str, **context: Any) -> None:
+    print(f"git-guard: {format_reject(code, context)}", file=sys.stderr)
+
+
 def is_allowed_branch_ref(policy: dict[str, Any], ref: str) -> bool:
     allowed_refs = {f"refs/heads/{name}" for name in policy["branches"].get("long_lived", [])}
     if ref in allowed_refs:
@@ -366,15 +733,16 @@ def is_allowed_branch_ref(policy: dict[str, Any], ref: str) -> bool:
 def validate_branch_creation_or_replacement(
     repo: Path,
     policy: dict[str, Any],
+    config: dict[str, Any],
     proposed: dict[str, str],
     update: RefUpdate,
 ) -> None:
     if ref_exists(repo, update.ref):
         existing = RefUpdate(old=rev_parse(repo, update.ref), new=update.new, ref=update.ref)
         if update.ref in set(policy.get("protected_refs", [])):
-            validate_protected_target_update(repo, policy, proposed, existing)
+            validate_protected_target_update(repo, policy, config, proposed, existing)
         else:
-            validate_managed_branch_update(repo, policy, existing)
+            validate_managed_branch_update(repo, policy, config, existing)
         return
 
     if update.ref in set(policy.get("protected_refs", [])):
@@ -391,14 +759,16 @@ def validate_branch_creation_or_replacement(
         raise HookReject("BRANCH_SOURCE_MISMATCH", ref=update.ref, source_ref=source_ref, new=short_sha(update.new))
 
 
-def validate_managed_branch_update(repo: Path, policy: dict[str, Any], update: RefUpdate) -> None:
+def validate_managed_branch_update(repo: Path, policy: dict[str, Any], config: dict[str, Any], update: RefUpdate) -> None:
     if update.new == ZERO:
         return
     if not is_ancestor(repo, update.old, update.new):
         raise HookReject("MANAGED_BRANCH_NON_FAST_FORWARD", ref=update.ref, old=short_sha(update.old), new=short_sha(update.new))
 
     for source_ref in introduced_policy_branch_heads(repo, policy, update):
-        if merge_rule_allows_source(policy, source_ref, update.ref):
+        rule = merge_rule_for_source(policy, source_ref, update.ref)
+        if rule:
+            enforce_branch_log_target_invariant(repo, config, update)
             continue
         raise HookReject(
             "MANAGED_BRANCH_SOURCE_NOT_ALLOWED",
@@ -429,16 +799,17 @@ def maximal_branch_heads(repo: Path, heads: list[tuple[str, str]]) -> list[tuple
     return maximal
 
 
-def merge_rule_allows_source(policy: dict[str, Any], source_ref: str, target_ref: str) -> bool:
+def merge_rule_for_source(policy: dict[str, Any], source_ref: str, target_ref: str) -> dict[str, Any] | None:
     for rule in policy.get("merge_rules", []):
         if rule_targets_ref(rule, target_ref) and re.match(rule["source_ref_regex"], source_ref):
-            return True
-    return False
+            return rule
+    return None
 
 
 def validate_protected_target_update(
     repo: Path,
     policy: dict[str, Any],
+    config: dict[str, Any],
     proposed: dict[str, str],
     update: RefUpdate,
 ) -> None:
@@ -463,7 +834,8 @@ def validate_protected_target_update(
         )
 
     candidate = candidates[0]
-    enforce_source_freshness(repo, candidate, update)
+    enforce_sync_merge_required(repo, candidate, update)
+    enforce_branch_log_target_invariant(repo, config, update)
 
     required = required_target_refs(policy, candidate.rule["source"])
     if len(required) <= 1:
@@ -511,17 +883,32 @@ def rule_targets_ref(rule: dict[str, Any], ref: str) -> bool:
     return rule.get("target_ref") == ref
 
 
-def enforce_source_freshness(repo: Path, candidate: SourceCandidate, update: RefUpdate) -> None:
-    if not candidate.rule.get("source_must_contain_target"):
+def enforce_sync_merge_required(repo: Path, candidate: SourceCandidate, update: RefUpdate) -> None:
+    if not candidate.rule.get("sync_merge_required"):
         return
-    if is_ancestor(repo, update.old, candidate.sha):
+    if is_first_parent_ancestor(repo, update.old, candidate.sha):
+        return
+    if has_non_first_parent(repo, candidate.sha, update.old):
         return
     raise HookReject(
-        "MERGE_SOURCE_BEHIND_TARGET",
+        "SYNC_MERGE_REQUIRED",
         source_ref=candidate.ref,
         source=short_sha(candidate.sha),
         target_ref=update.ref,
         target=short_sha(update.old),
+    )
+
+
+def enforce_branch_log_target_invariant(repo: Path, config: dict[str, Any], update: RefUpdate) -> None:
+    settings = branch_log_settings(config)
+    if not branch_log_path_changed(repo, update.old, update.new, settings.path):
+        return
+    raise HookReject(
+        "BRANCH_LOG_TARGET_CHANGED",
+        ref=update.ref,
+        path=settings.path,
+        old=short_sha(update.old),
+        new=short_sha(update.new),
     )
 
 
@@ -1058,6 +1445,40 @@ def refs_matching(repo: Path, pattern: str) -> list[str]:
     return [ref for ref in refs if re.match(pattern, ref)]
 
 
+def current_branch_ref(repo: Path) -> str | None:
+    result = git(repo, "symbolic-ref", "-q", "HEAD", check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def branch_log_untracked_files(repo: Path, path: str) -> list[str]:
+    untracked = git_literal_pathspec(repo, "ls-files", "--others", "--exclude-standard", "--", path).stdout.splitlines()
+    ignored = git_literal_pathspec(repo, "ls-files", "--others", "--ignored", "--exclude-standard", "--", path).stdout.splitlines()
+    return sorted(set(untracked + ignored))
+
+
+def branch_log_unstaged_files(repo: Path, path: str) -> list[str]:
+    result = git_literal_pathspec(repo, "diff", "--name-only", "--", path)
+    return result.stdout.splitlines()
+
+
+def branch_log_tracked_in_index(repo: Path, path: str) -> bool:
+    result = git_literal_pathspec(repo, "ls-files", "--cached", "--", path)
+    return bool(result.stdout.splitlines())
+
+
+def branch_log_path_changed(repo: Path, old: str, new: str, path: str) -> bool:
+    if old == ZERO or new == ZERO:
+        return False
+    result = git_literal_pathspec(repo, "diff", "--quiet", "--exit-code", old, new, "--", path, check=False)
+    if result.returncode == 0:
+        return False
+    if result.returncode == 1:
+        return True
+    raise HookReject("GIT_COMMAND_FAILED", command=f"git diff --quiet --exit-code {old} {new} -- {path}", stderr=result.stderr.strip())
+
+
 def first_matching(items: list[dict[str, Any]], key: str, ref: str) -> dict[str, Any] | None:
     for item in items:
         if re.match(item[key], ref):
@@ -1088,6 +1509,21 @@ def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
     return git(repo, "merge-base", "--is-ancestor", ancestor, descendant, check=False).returncode == 0
 
 
+def is_first_parent_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
+    if ancestor == ZERO or descendant == ZERO:
+        return False
+    result = git(repo, "rev-list", "--first-parent", "--format=%H", descendant)
+    return ancestor in {line for line in result.stdout.splitlines() if line and not line.startswith("commit ")}
+
+
+def has_non_first_parent(repo: Path, commit: str, parent: str) -> bool:
+    if commit == ZERO or parent == ZERO:
+        return False
+    result = git(repo, "rev-list", "--parents", "-n", "1", commit)
+    parts = result.stdout.strip().split()
+    return len(parts) > 2 and parent in parts[2:]
+
+
 def ref_contains(repo: Path, ref_or_sha: str, sha: str) -> bool:
     if ref_or_sha.startswith("refs/") and not ref_exists(repo, ref_or_sha):
         return False
@@ -1100,6 +1536,15 @@ def is_policy_ref(ref: str) -> bool:
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = git_with_env(repo, os.environ.copy(), *args, check=False)
+    if check and result.returncode != 0:
+        raise HookReject("GIT_COMMAND_FAILED", command="git " + " ".join(args), stderr=result.stderr.strip())
+    return result
+
+
+def git_literal_pathspec(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["GIT_LITERAL_PATHSPECS"] = "1"
+    result = git_with_env(repo, env, *args, check=False)
     if check and result.returncode != 0:
         raise HookReject("GIT_COMMAND_FAILED", command="git " + " ".join(args), stderr=result.stderr.strip())
     return result
