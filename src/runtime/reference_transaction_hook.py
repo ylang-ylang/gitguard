@@ -130,8 +130,8 @@ def main() -> int:
         print(f"git-guard: {exc}", file=sys.stderr)
         if exc.code == "WORKTREE_BRANCH_CREATION_NOT_ALLOWED":
             print(
-                "git-guard: linked worktrees should keep one branch per directory; "
-                "create a new worktree directory for this branch from the main worktree.",
+                "git-guard: branch creation is blocked only in this linked worktree; "
+                "create the branch by adding a new worktree directory from the main worktree instead.",
                 file=sys.stderr,
             )
         source_path = policy_hint_path(repo, policy)
