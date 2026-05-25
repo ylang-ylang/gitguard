@@ -87,6 +87,7 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: rules allow direct dev commits, but policy rejects them")
 
     def install_hook(self) -> None:
+        self.seed_default_branch_logs_before_install()
         install_policy_hook(self.repo, self.config_dir, scope="worktree")
         expected_files = [
             self.repo / ".git-guard" / "contribution.md",
@@ -95,6 +96,7 @@ class PolicyHookTestBase:
             self.repo / ".git-guard" / "enable.sh",
             self.repo / ".git-guard" / "hooks" / "reference-transaction",
             self.repo / ".git-guard" / "hooks" / "pre-push",
+            self.repo / ".git-guard" / "hooks" / "pre-commit",
             self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py",
         ]
         for path in expected_files:
@@ -111,13 +113,17 @@ class PolicyHookTestBase:
         if "original_path" in source:
             raise AssertionError(f"{self.name}: policy source should not include original_path: {source['original_path']}")
         config = json.loads((self.repo / ".git-guard" / "config.json").read_text(encoding="utf-8"))
+        if config.get("branch_logs", {}).get("path") != ".branch_logs/":
+            raise AssertionError(f"{self.name}: config should set default branch log path")
+        if config.get("branch_logs", {}).get("force_required") is not True:
+            raise AssertionError(f"{self.name}: config should force branch logs by default")
         if config.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
             raise AssertionError(f"{self.name}: config should enable linked worktree branch creation guard by default")
         if config.get("pre_push", {}).get("auto_push_missing_tags") is not True:
             raise AssertionError(f"{self.name}: config should enable missing tag auto-push by default")
         if config.get("runtime", {}).get("auto_sync") is not True:
             raise AssertionError(f"{self.name}: config should enable runtime auto-sync by default")
-        for hook_name in ["reference-transaction", "pre-push"]:
+        for hook_name in ["reference-transaction", "pre-push", "pre-commit"]:
             hook_text = (self.repo / ".git-guard" / "hooks" / hook_name).read_text(encoding="utf-8")
             if "git_guard_runtime_sync" not in hook_text:
                 raise AssertionError(f"{self.name}: {hook_name} hook should include runtime auto-sync")
@@ -167,6 +173,10 @@ class PolicyHookTestBase:
         updated = json.loads(config_path.read_text(encoding="utf-8"))
         if updated.get("runtime", {}).get("auto_sync") is not False:
             raise AssertionError(f"{self.name}: reinstall should preserve runtime.auto_sync=false")
+        if updated.get("branch_logs", {}).get("path") != ".branch_logs/":
+            raise AssertionError(f"{self.name}: reinstall should preserve/add branch_logs.path")
+        if updated.get("branch_logs", {}).get("force_required") is not True:
+            raise AssertionError(f"{self.name}: reinstall should preserve/add branch_logs.force_required=true")
         if updated.get("pre_push", {}).get("auto_push_missing_tags") is not True:
             raise AssertionError(f"{self.name}: reinstall should preserve/add pre_push defaults")
         if updated.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
@@ -279,6 +289,63 @@ class PolicyHookTestBase:
             cleanup()
         return result
 
+    def expect_merge_rejected(self, source: str, expected: str) -> CommandResult:
+        target_old = self.rev_parse("HEAD")
+        before = self.ref_snapshot()
+        result = self.git("merge", "--no-ff", "--no-edit", "--no-commit", "-X", "ours", source, check=False)
+        if result.returncode != 0:
+            conflicts = self.conflicted_paths()
+            non_branch_log_conflicts = [path for path in conflicts if path != ".branch_logs" and not path.startswith(".branch_logs/")]
+            if not conflicts or non_branch_log_conflicts:
+                raise AssertionError(
+                    f"{self.name}: merge setup for expected rejection failed before hook check\n"
+                    f"non-branch-log conflicts: {non_branch_log_conflicts}\n"
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+                )
+        self.restore_target_branch_log_tree(target_old)
+        remaining_conflicts = self.conflicted_paths()
+        if remaining_conflicts:
+            raise AssertionError(f"{self.name}: unresolved merge conflicts before expected rejection: {remaining_conflicts}")
+
+        result = self.git("commit", "-m", f"MR {source} expected rejection", check=False)
+        after = self.ref_snapshot()
+        combined = result.stdout + result.stderr
+
+        if result.returncode == 0:
+            marker_sha = self.create_unexpected_acceptance_marker(["merge", source])
+            raise AssertionError(
+                f"{self.name}: expected rejection for merge {source}, but it was accepted\n"
+                f"failure marker: {marker_sha}\n"
+                f"refs before: {json.dumps(before.refs, indent=2, sort_keys=True)}\n"
+                f"refs after: {json.dumps(after.refs, indent=2, sort_keys=True)}"
+            )
+        if expected not in combined:
+            raise AssertionError(
+                f"{self.name}: expected rejection containing {expected!r} for merge {source}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        expected_policy_hint = f"see policy: {self.expected_policy_hint_path()}"
+        if expected_policy_hint not in combined:
+            raise AssertionError(
+                f"{self.name}: expected rejection to include policy hint {expected_policy_hint!r} "
+                f"for merge {source}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if EXPECTED_AGENT_HINT not in combined:
+            raise AssertionError(
+                f"{self.name}: expected rejection to include agent guidance for merge {source}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if after.refs != before.refs:
+            raise AssertionError(
+                f"{self.name}: rejected merge {source} changed refs\n"
+                f"before: {json.dumps(before.refs, indent=2, sort_keys=True)}\n"
+                f"after: {json.dumps(after.refs, indent=2, sort_keys=True)}"
+            )
+        self.cleanup_merge_state()
+        if self.rev_parse("HEAD") != target_old:
+            raise AssertionError(f"{self.name}: expected rejected merge cleanup to restore {target_old}")
+        return result
+
     def create_unexpected_acceptance_marker(self, args: list[str]) -> str:
         self.git_no_hooks("merge", "--abort", check=False)
         marker_path = self.repo / "UNEXPECTED_ACCEPTANCE.txt"
@@ -381,6 +448,46 @@ class PolicyHookTestBase:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
 
+    def seed_default_branch_logs_before_install(self) -> None:
+        current = self.git_no_hooks("branch", "--show-current").stdout.strip()
+        for branch in self.policy.get("branches", {}).get("long_lived", []):
+            if not ref_exists(self.repo, f"refs/heads/{branch}"):
+                continue
+            self.git_no_hooks("checkout", branch)
+            self.ensure_current_branch_log_staged()
+            if self.git_no_hooks("diff", "--cached", "--quiet", check=False).returncode != 0:
+                self.git_no_hooks("commit", "-m", f"seed {branch} branch log")
+        if current:
+            self.git_no_hooks("checkout", current)
+
+    def ensure_current_branch_log_staged(self) -> None:
+        branch = self.git_no_hooks("branch", "--show-current").stdout.strip()
+        if not branch:
+            return
+        filename = f".branch_logs/{branch_log_slug(branch)}.md"
+        path = self.repo / filename
+        if path.exists():
+            return
+        self.write_file(filename, f"# {branch}\n\nbranch-local test log\n")
+        self.git_no_hooks("add", filename)
+
+    def conflicted_paths(self) -> list[str]:
+        output = self.git_no_hooks("diff", "--name-only", "--diff-filter=U").stdout
+        return [line for line in output.splitlines() if line]
+
+    def restore_target_branch_log_tree(self, target_old: str = "HEAD") -> None:
+        path = ".branch_logs"
+        target_had_branch_logs = self.git_no_hooks("cat-file", "-e", f"{target_old}:{path}", check=False).returncode == 0
+        self.git_no_hooks("rm", "-r", "--cached", "--ignore-unmatch", path)
+        branch_log_path = self.repo / path
+        if branch_log_path.is_dir():
+            shutil.rmtree(branch_log_path)
+        elif branch_log_path.exists():
+            branch_log_path.unlink()
+        if target_had_branch_logs:
+            self.git_no_hooks("checkout", target_old, "--", path)
+            self.git_no_hooks("add", path)
+
     def create_branch(self, branch: str, source: str) -> None:
         self.git("checkout", source)
         self.git("checkout", "-b", branch)
@@ -389,12 +496,29 @@ class PolicyHookTestBase:
         self.git("checkout", branch)
         self.write_file(filename, content)
         self.git("add", filename)
+        if not filename == ".branch_logs" and not filename.startswith(".branch_logs/"):
+            self.ensure_current_branch_log_staged()
         self.git("commit", "-m", message)
         return self.rev_parse("HEAD")
 
     def merge_to(self, source: str, target: str, message: str | None = None) -> None:
         self.git("checkout", target)
-        self.git("merge", "--no-ff", "--no-edit", "-m", message or f"MR {source} to {target}", source)
+        target_old = self.rev_parse("HEAD")
+        result = self.git("merge", "--no-ff", "--no-edit", "--no-commit", "-X", "ours", source, check=False)
+        if result.returncode != 0:
+            conflicts = self.conflicted_paths()
+            non_branch_log_conflicts = [path for path in conflicts if path != ".branch_logs" and not path.startswith(".branch_logs/")]
+            if not conflicts or non_branch_log_conflicts:
+                raise AssertionError(
+                    f"git merge --no-ff --no-edit --no-commit -X ours {source} failed in {self.repo}\n"
+                    f"non-branch-log conflicts: {non_branch_log_conflicts}\n"
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+                )
+        self.restore_target_branch_log_tree(target_old)
+        remaining_conflicts = self.conflicted_paths()
+        if remaining_conflicts:
+            raise AssertionError(f"{self.name}: unresolved merge conflicts after branch log restore: {remaining_conflicts}")
+        self.git("commit", "-m", message or f"MR {source} to {target}")
 
     def tag(self, name: str, ref: str) -> None:
         self.git("tag", name, ref)
@@ -430,6 +554,10 @@ def git_raw(cwd: Path, *args: str, check: bool = True) -> CommandResult:
 
 def ref_exists(cwd: Path, ref: str) -> bool:
     return git_raw(cwd, "show-ref", "--verify", "--quiet", ref, check=False).returncode == 0
+
+
+def branch_log_slug(branch: str) -> str:
+    return branch.replace("/", "__").replace("@", "_")
 
 
 def run_raw(cwd: Path, args: list[str], check: bool = True) -> CommandResult:

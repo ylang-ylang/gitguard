@@ -57,25 +57,13 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
         )
 
         self.git("checkout", "main")
-        self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", "feat/reject-to-main"],
-            "PROTECTED_REF_NO_ALLOWED_SOURCE",
-            cleanup=self.cleanup_merge_state,
-        )
+        self.expect_merge_rejected("feat/reject-to-main", "PROTECTED_REF_NO_ALLOWED_SOURCE")
 
         self.git("checkout", "dev")
-        self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", "case/main-context/reject-direct"],
-            "PROTECTED_REF_NO_ALLOWED_SOURCE",
-            cleanup=self.cleanup_merge_state,
-        )
+        self.expect_merge_rejected("case/main-context/reject-direct", "PROTECTED_REF_NO_ALLOWED_SOURCE")
 
         self.git("checkout", "main")
-        self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", "case/main-context/reject-direct"],
-            "PROTECTED_REF_NO_ALLOWED_SOURCE",
-            cleanup=self.cleanup_merge_state,
-        )
+        self.expect_merge_rejected("case/main-context/reject-direct", "PROTECTED_REF_NO_ALLOWED_SOURCE")
 
         self.expect_rejected(["tag", "release-1.0.0", "main"], "TAG_TARGET_TAG_PATTERN_MISMATCH")
         self.expect_rejected(
@@ -86,11 +74,7 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
         self.assert_hotfix_wrong_line_rejected()
 
         self.git("checkout", "main")
-        self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", "release/reject-main-before-dev"],
-            "MULTI_TARGET_ORDER",
-            cleanup=self.cleanup_merge_state,
-        )
+        self.expect_merge_rejected("release/reject-main-before-dev", "MULTI_TARGET_ORDER")
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
