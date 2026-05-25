@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -129,8 +130,8 @@ def main() -> int:
         print(f"git-guard: {exc}", file=sys.stderr)
         if exc.code == "WORKTREE_BRANCH_CREATION_NOT_ALLOWED":
             print(
-                "git-guard: linked worktrees should keep one branch per directory; "
-                "create a new worktree directory for this branch from the main worktree.",
+                "git-guard: branch creation is blocked only in this linked worktree; "
+                "create the branch by adding a new worktree directory from the main worktree instead.",
                 file=sys.stderr,
             )
         source_path = policy_hint_path(repo, policy)
@@ -297,6 +298,7 @@ def auto_push_missing_tags(repo: Path, remote: str, display_remote: str, tags: l
 
 def validate_prepared(repo: Path, policy: dict[str, Any], config: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
     enforce_linked_worktree_branch_creation_guard(repo, config, updates)
+    validate_branch_rename_target(policy, updates)
 
     state = load_state(state_path)
     pending = state.get("pending", {})
@@ -332,6 +334,99 @@ def validate_branch_name(policy: dict[str, Any], ref: str) -> None:
     if is_allowed_branch_ref(policy, ref):
         return
     raise HookReject("BRANCH_NAME_NOT_ALLOWED", ref=ref)
+
+
+def validate_branch_rename_target(policy: dict[str, Any], updates: list[RefUpdate]) -> None:
+    deleted_heads = [
+        update
+        for update in updates
+        if update.ref.startswith("refs/heads/") and update.old != ZERO and update.new == ZERO
+    ]
+    if not deleted_heads:
+        return
+
+    if not any(update.ref == "HEAD" and update.old != ZERO and update.new == ZERO for update in updates):
+        return
+
+    target_ref = branch_rename_target_ref_from_parent()
+    if not target_ref:
+        raise HookReject("BRANCH_RENAME_TARGET_UNOBSERVABLE", ref=deleted_heads[0].ref)
+    validate_branch_name(policy, target_ref)
+
+
+def branch_rename_target_ref_from_parent() -> str | None:
+    argv = parent_process_argv()
+    if not argv:
+        return None
+    target = branch_rename_target_from_argv(argv)
+    if not target:
+        return None
+    if target.startswith("refs/heads/"):
+        return target
+    return f"refs/heads/{target}"
+
+
+def parent_process_argv() -> list[str]:
+    parent_pid = os.getppid()
+    argv = proc_cmdline_argv(parent_pid)
+    if argv:
+        return argv
+    return ps_command_argv(parent_pid)
+
+
+def proc_cmdline_argv(pid: int) -> list[str]:
+    proc_path = Path("/proc") / str(pid) / "cmdline"
+    try:
+        raw = proc_path.read_bytes()
+    except OSError:
+        return []
+    return [part.decode(errors="replace") for part in raw.split(b"\0") if part]
+
+
+def ps_command_argv(pid: int) -> list[str]:
+    result = subprocess.run(
+        ["ps", "-o", "command=", "-p", str(pid)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        return shlex.split(result.stdout.strip())
+    except ValueError:
+        return []
+
+
+def branch_rename_target_from_argv(argv: list[str]) -> str | None:
+    try:
+        branch_index = next(index for index, item in enumerate(argv) if Path(item).name == "branch")
+    except StopIteration:
+        return None
+
+    args = argv[branch_index + 1 :]
+    if not any(arg in {"-m", "-M", "--move", "--Move"} for arg in args):
+        return None
+
+    positional: list[str] = []
+    end_of_options = False
+    for arg in args:
+        if end_of_options:
+            positional.append(arg)
+            continue
+        if arg == "--":
+            end_of_options = True
+            continue
+        if arg in {"-m", "-M", "--move", "--Move"}:
+            continue
+        if arg.startswith("-"):
+            continue
+        positional.append(arg)
+
+    if not positional:
+        return None
+    return positional[-1]
 
 
 def enforce_linked_worktree_branch_creation_guard(repo: Path, config: dict[str, Any], updates: list[RefUpdate]) -> None:
