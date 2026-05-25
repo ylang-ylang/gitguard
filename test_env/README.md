@@ -49,7 +49,7 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
 
 The rejection reason itself uses a stable `CODE key=value` format so tests and agents can match exact failure classes without parsing friendly prose.
 
-The `dev-feat` integration test also verifies that the generated `pre-push` hook auto-pushes local release tags that satisfy policy but are missing from the target remote when `pre_push.auto_push_missing_tags` is enabled, while printing a visible sync message.
+The `dev-feat-case` integration test also verifies that the generated `pre-push` hook auto-pushes local release tags that satisfy policy but are missing from the target remote when `pre_push.auto_push_missing_tags` is enabled, while printing a visible sync message.
 
 Each config gets a separate test directory:
 
@@ -60,10 +60,10 @@ Each config gets a separate test directory:
 For example:
 
 ```text
-.tmp/dev-feat-release-hotfix
-.tmp/dev-infra-feat-release-hotfix
+.tmp/dev-feat-release-hotfix-case
+.tmp/dev-infra-feat-release-hotfix-case
 .tmp/dev-only
-.tmp/dev-feat
+.tmp/dev-feat-case
 ```
 
 Each config test repo is built by a config-specific test class that inherits from the shared policy hook test base:

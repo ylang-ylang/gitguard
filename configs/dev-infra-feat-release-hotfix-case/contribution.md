@@ -1,35 +1,54 @@
-# Infra/Feature Release Flow
+# Infra/Feature Release Case Flow
 
 ```mermaid
 gitGraph TB:
     commit id:"init"
-    branch dev
+
+    checkout main
+    branch dev order: 1
+    checkout main
+    commit id:"main after dev fork"
+
     checkout dev
-    commit id:"dev baseline"
+    commit id:"dev branch history"
 
     %% Cross-module infrastructure work
-    branch "infra/*"
+    branch "infra/*" order: 2
+    checkout main
+    commit id:"main after infra fork"
     checkout "infra/*"
     commit id:"infra work"
 
     checkout dev
-    commit id:"dev advances during infra work"
+    commit id:"dev branch infra sync point"
 
     checkout "infra/*"
-    merge dev id:"dev to infra/* sync"
     commit id:"infra validation"
+    merge dev id:"dev to infra/* sync"
 
     checkout dev
     merge "infra/*" id:"infra/* to dev"
 
     %% Single-module feature work
     checkout dev
-    branch "feat/*"
+    branch "feat/*" order: 3
+    checkout main
+    commit id:"main after feat fork"
+
+    checkout main
+    branch "case/*/*" order: 6
+    checkout main
+    commit id:"main after case fork"
+
+    checkout "case/*/*"
+    commit id:"case work"
+
     checkout "feat/*"
+    merge "case/*/*" id:"case/*/* to feat/*"
     commit id:"feature work"
 
     checkout dev
-    commit id:"dev advances during feature work"
+    commit id:"dev branch feature sync point"
 
     checkout "feat/*"
     merge dev id:"dev to feat/* sync"
@@ -38,7 +57,9 @@ gitGraph TB:
     merge "feat/*" id:"feat/* to dev"
 
     %% Release from dev to main
-    branch "release/*"
+    branch "release/*" order: 4
+    checkout main
+    commit id:"main after release fork"
     checkout "release/*"
     commit id:"release hardening"
     commit id:"integration test"
@@ -50,7 +71,9 @@ gitGraph TB:
 
     %% Hotfix from main
     checkout main
-    branch "hotfix/*"
+    branch "hotfix/*" order: 5
+    checkout main
+    commit id:"main after hotfix fork"
     checkout "hotfix/*"
     commit id:"hotfix"
     checkout dev
@@ -62,7 +85,11 @@ gitGraph TB:
 ## Rules
 
 - `infra/*` and `feat/*` branch from `dev`, must absorb the current `dev`, and merge to `dev`.
+- `case/*/*` means `case/<context>/<topic>`, where `<context>` is a real project, customer, dataset, robot, deployment, or reproducible scenario.
+- `case/*/*` branches from `main` and may merge only into `feat/*`.
+- `case/*/*` must not merge directly into `dev` or `main`; reusable work must be distilled through `feat/*`.
 - `release/*` branches from `dev`, must merge to `dev`, then merge to `main`; the `main` merge result must be tagged with `v#.#.0`.
 - `hotfix/*` branches from `main`, must merge to `dev`, then merge to `main`; the `main` merge result must be tagged with `v=.=.#`.
+- `dev` is the integration branch and must not receive direct commits after the policy is installed.
 - `#` in tag patterns means one or more decimal digits.
 - `=` in tag patterns means the same numeric component as the base release tag for this source branch.
