@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
         "auto_sync": True,
     },
     "submodules": {
+        "allowed_branches": ["main", "case/*/*"],
         "main_guard": True,
     },
     "worktree": {

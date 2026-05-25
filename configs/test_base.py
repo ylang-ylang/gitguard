@@ -109,6 +109,8 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: config should enable missing tag auto-push by default")
         if config.get("runtime", {}).get("auto_sync") is not True:
             raise AssertionError(f"{self.name}: config should enable runtime auto-sync by default")
+        if config.get("submodules", {}).get("allowed_branches") != ["main", "case/*/*"]:
+            raise AssertionError(f"{self.name}: config should default submodule allowed branches to main and case/*/*")
         if config.get("submodules", {}).get("main_guard") is not True:
             raise AssertionError(f"{self.name}: config should enable submodule main guard by default")
         for hook_name in ["reference-transaction", "pre-push"]:
@@ -165,6 +167,8 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: reinstall should preserve/add pre_push defaults")
         if updated.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
             raise AssertionError(f"{self.name}: reinstall should preserve/add worktree defaults")
+        if updated.get("submodules", {}).get("allowed_branches") != ["main", "case/*/*"]:
+            raise AssertionError(f"{self.name}: reinstall should preserve/add submodule allowed branch defaults")
         if updated.get("submodules", {}).get("main_guard") is not True:
             raise AssertionError(f"{self.name}: reinstall should preserve/add submodule main guard defaults")
 
@@ -395,6 +399,22 @@ class PolicyHookTestBase:
         result = self.git("commit", "-m", "pin submodule to local main")
         self.assert_output_contains(result, "SUBMODULE_NOT_ON_ORIGIN_MAIN_BUT_ON_LOCAL_MAIN")
 
+        case_base = self.git_in(submodule, "rev-parse", "--verify", "origin/case/allowed/topic~1").stdout.strip()
+        self.git_in(submodule, "checkout", "--detach", case_base)
+        self.git("add", "modules/lib")
+        result = self.git("commit", "-m", "pin submodule behind allowed case branch")
+        self.assert_output_contains(result, "SUBMODULE_BEHIND_ALLOWED_REMOTE_BRANCH")
+        self.assert_output_contains(result, "branch=case/allowed/topic")
+
+        self.git_in(submodule, "checkout", "-b", "case/local/topic", "origin/case/allowed/topic")
+        self.write_repo_file(submodule, "local-case.txt", "local case only\n")
+        self.git_in(submodule, "add", "local-case.txt")
+        self.git_in(submodule, "commit", "-m", "local case only")
+        self.git("add", "modules/lib")
+        result = self.git("commit", "-m", "pin submodule to local case branch")
+        self.assert_output_contains(result, "SUBMODULE_NOT_ON_ALLOWED_REMOTE_BRANCH_BUT_ON_LOCAL_BRANCH")
+        self.assert_output_contains(result, "branch=case/local/topic")
+
         allowed_parent = self.rev_parse(target_branch)
         self.git_in(submodule, "checkout", "-b", "side", "origin/main")
         self.write_repo_file(submodule, "side.txt", "side only\n")
@@ -422,6 +442,12 @@ class PolicyHookTestBase:
             "CONFIG_INVALID",
         )
         self.set_submodule_main_guard(True)
+        self.set_submodule_allowed_branches("main")
+        self.expect_rejected(
+            ["commit", "--allow-empty", "-m", "submodule allowed branches scalar is invalid"],
+            "CONFIG_INVALID",
+        )
+        self.set_submodule_allowed_branches(["main", "case/*/*"])
 
         shutil.rmtree(submodule)
         self.write_file("missing-submodule-check.txt", "missing submodule check\n")
@@ -466,7 +492,21 @@ class PolicyHookTestBase:
         self.write_repo_file(remote, "lib.txt", "tip\n")
         self.git_in(remote, "add", "lib.txt")
         self.git_in(remote, "commit", "-m", "submodule tip")
+        self.git_in(remote, "checkout", "-b", "case/allowed/topic", "main")
+        self.write_repo_file(remote, "case.txt", "case base\n")
+        self.git_in(remote, "add", "case.txt")
+        self.git_in(remote, "commit", "-m", "submodule case base")
+        self.write_repo_file(remote, "case.txt", "case tip\n")
+        self.git_in(remote, "add", "case.txt")
+        self.git_in(remote, "commit", "-m", "submodule case tip")
+        self.git_in(remote, "checkout", "main")
         return remote
+
+    def set_submodule_allowed_branches(self, allowed_branches: object) -> None:
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config.setdefault("submodules", {})["allowed_branches"] = allowed_branches
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     def set_submodule_main_guard(self, enabled: bool) -> None:
         config_path = self.repo / ".git-guard" / "config.json"

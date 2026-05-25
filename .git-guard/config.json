@@ -6,6 +6,10 @@
     "auto_sync": false
   },
   "submodules": {
+    "allowed_branches": [
+      "main",
+      "case/*/*"
+    ],
     "main_guard": true
   },
   "worktree": {
