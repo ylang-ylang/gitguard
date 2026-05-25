@@ -76,6 +76,8 @@ class DevFeatHookTest(PolicyHookTestBase):
         self.assert_pending_tag_count(0)
         self.assert_pre_push_auto_syncs_release_tags()
         self.assert_pre_push_auto_sync_can_be_disabled()
+        self.assert_branch_log_pre_commit_guards()
+        self.assert_branch_log_must_be_dropped_on_merge()
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
@@ -195,6 +197,91 @@ class DevFeatHookTest(PolicyHookTestBase):
 
         config.setdefault("pre_push", {})["auto_push_missing_tags"] = True
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def assert_branch_log_pre_commit_guards(self) -> None:
+        branch = "feat/log-tracking"
+        self.create_branch(branch, "dev")
+        self.write_file(".branch_logs/untracked.md", "untracked branch log\n")
+        self.write_file("log-tracking.txt", "work\n")
+        self.git("add", "log-tracking.txt")
+
+        result = self.git("commit", "-m", "missing staged branch log", check=False)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "BRANCH_LOG_UNTRACKED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected untracked branch log rejection\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+
+        self.git("add", ".branch_logs/untracked.md")
+        self.git("commit", "-m", "track branch log")
+
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config.setdefault("branch_logs", {})["required"] = True
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        required_branch = "feat/log-required"
+        self.create_branch(required_branch, "dev")
+        self.write_file("log-required.txt", "work\n")
+        self.git("add", "log-required.txt")
+        result = self.git("commit", "-m", "missing required branch log", check=False)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "BRANCH_LOG_REQUIRED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected required branch log rejection\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+
+        self.write_file(".branch_logs/required.md", "required branch log\n")
+        self.git("add", ".branch_logs/required.md")
+        self.git("commit", "-m", "add required branch log")
+
+        config.setdefault("branch_logs", {})["path"] = ".branch-log.md"
+        config.setdefault("branch_logs", {})["required"] = True
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        required_file_branch = "feat/log-required-file"
+        self.create_branch(required_file_branch, "dev")
+        self.write_file("log-required-file.txt", "work\n")
+        self.git("add", "log-required-file.txt")
+        result = self.git("commit", "-m", "missing required branch log file", check=False)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "BRANCH_LOG_REQUIRED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected required branch log file rejection\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+
+        self.write_file(".branch-log.md", "required branch log file\n")
+        self.git("add", ".branch-log.md")
+        self.git("commit", "-m", "add required branch log file")
+
+        config.setdefault("branch_logs", {})["path"] = ".branch_logs/"
+        config.setdefault("branch_logs", {})["required"] = False
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def assert_branch_log_must_be_dropped_on_merge(self) -> None:
+        branch = "feat/log-drop"
+        self.create_branch(branch, "dev")
+        self.commit_file(branch, "log-drop-feature.txt", "feature\n", "feature with branch log")
+        self.commit_file(branch, ".branch_logs/log-drop.md", "branch-local log\n", "record branch log")
+
+        self.git("checkout", "dev")
+        self.expect_rejected(
+            ["merge", "--no-ff", "--no-edit", branch],
+            "BRANCH_LOG_MUST_BE_DROPPED",
+            cleanup=self.cleanup_merge_state,
+        )
+
+        self.git("checkout", "dev")
+        self.git("merge", "--no-ff", "--no-commit", branch)
+        self.git("rm", "-r", "--cached", ".branch_logs")
+        shutil.rmtree(self.repo / ".branch_logs", ignore_errors=True)
+        self.git("commit", "-m", f"MR {branch} to dev without branch log")
+
+        if (self.repo / ".branch_logs").exists():
+            raise AssertionError(f"{self.name}: branch log directory leaked into dev")
 
 
 TEST_CASE = DevFeatHookTest

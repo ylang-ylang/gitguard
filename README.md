@@ -145,6 +145,7 @@ It copies the packaged runtime hook into the target repo:
 <repo>/.git-guard/contribution.md
 <repo>/.git-guard/config.json
 <repo>/.git-guard/enable.sh
+<repo>/.git-guard/hooks/pre-commit
 <repo>/.git-guard/hooks/pre-push
 <repo>/.git-guard/hooks/reference-transaction
 <repo>/.git-guard/policy.json
@@ -185,6 +186,10 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
 
 ```json
 {
+  "branch_logs": {
+    "path": ".branch_logs/",
+    "required": false
+  },
   "pre_push": {
     "auto_push_missing_tags": true
   },
@@ -196,6 +201,14 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
   }
 }
 ```
+
+`branch_logs.path` is a repository-root-relative file or directory path for branch-local development notes. The default `.branch_logs/` treats every tracked file under that directory as branch-local. Git cannot track an empty directory, so directory paths need at least one file inside them.
+
+The installed `pre-commit` hook rejects commits when files under `branch_logs.path` are untracked, ignored, or have unstaged working-tree changes. This keeps branch logs from becoming local-only notes that are not actually recorded in the branch history.
+
+If `branch_logs.required` is `true`, commits on policy-managed branches must have tracked content at `branch_logs.path` in the index. If it is `false`, the path is optional, but any existing branch-log content still has to be tracked and staged cleanly before commit.
+
+When a policy-managed merge updates another branch, Git Guard requires `branch_logs.path` to remain unchanged relative to the target branch's old head. If a feature branch contains `.branch_logs/feat.md`, merging that feature into `dev` must produce a `dev` merge result that drops that branch-local path. Otherwise the merge is rejected with `BRANCH_LOG_MUST_BE_DROPPED`.
 
 For required `merge ... tag:"..."` rules, Git Guard treats the branch merge and tag creation as separate Git ref transactions. The merge may complete first, then the hook records a pending tag requirement for the target merge result. Until the matching tag is created, that target ref is locked with `PENDING_TAG_TARGET_MOVED`. Other refs, including the source branch, are not blocked by that pending release tag.
 

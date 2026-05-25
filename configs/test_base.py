@@ -86,6 +86,7 @@ class PolicyHookTestBase:
             self.repo / ".git-guard" / "enable.sh",
             self.repo / ".git-guard" / "hooks" / "reference-transaction",
             self.repo / ".git-guard" / "hooks" / "pre-push",
+            self.repo / ".git-guard" / "hooks" / "pre-commit",
             self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py",
         ]
         for path in expected_files:
@@ -102,13 +103,17 @@ class PolicyHookTestBase:
         if "original_path" in source:
             raise AssertionError(f"{self.name}: policy source should not include original_path: {source['original_path']}")
         config = json.loads((self.repo / ".git-guard" / "config.json").read_text(encoding="utf-8"))
+        if config.get("branch_logs", {}).get("path") != ".branch_logs/":
+            raise AssertionError(f"{self.name}: config should set default branch log path")
+        if config.get("branch_logs", {}).get("required") is not False:
+            raise AssertionError(f"{self.name}: config should not force branch logs by default")
         if config.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
             raise AssertionError(f"{self.name}: config should enable linked worktree branch creation guard by default")
         if config.get("pre_push", {}).get("auto_push_missing_tags") is not True:
             raise AssertionError(f"{self.name}: config should enable missing tag auto-push by default")
         if config.get("runtime", {}).get("auto_sync") is not True:
             raise AssertionError(f"{self.name}: config should enable runtime auto-sync by default")
-        for hook_name in ["reference-transaction", "pre-push"]:
+        for hook_name in ["reference-transaction", "pre-push", "pre-commit"]:
             hook_text = (self.repo / ".git-guard" / "hooks" / hook_name).read_text(encoding="utf-8")
             if "git_guard_runtime_sync" not in hook_text:
                 raise AssertionError(f"{self.name}: {hook_name} hook should include runtime auto-sync")
@@ -158,6 +163,10 @@ class PolicyHookTestBase:
         updated = json.loads(config_path.read_text(encoding="utf-8"))
         if updated.get("runtime", {}).get("auto_sync") is not False:
             raise AssertionError(f"{self.name}: reinstall should preserve runtime.auto_sync=false")
+        if updated.get("branch_logs", {}).get("path") != ".branch_logs/":
+            raise AssertionError(f"{self.name}: reinstall should preserve/add branch_logs.path")
+        if updated.get("branch_logs", {}).get("required") is not False:
+            raise AssertionError(f"{self.name}: reinstall should preserve/add branch_logs.required=false")
         if updated.get("pre_push", {}).get("auto_push_missing_tags") is not True:
             raise AssertionError(f"{self.name}: reinstall should preserve/add pre_push defaults")
         if updated.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
