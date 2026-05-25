@@ -13,11 +13,19 @@
       "target": "feat/*",
       "target_ref": "refs/heads/feat/*",
       "target_ref_regex": "^refs/heads/feat/.+$"
+    },
+    {
+      "source": "main",
+      "source_ref": "refs/heads/main",
+      "target": "case/*/*",
+      "target_ref": "refs/heads/case/*/*",
+      "target_ref_regex": "^refs/heads/case/.+/.+$"
     }
   ],
   "branches": {
     "families": [
-      "feat/*"
+      "feat/*",
+      "case/*/*"
     ],
     "long_lived": [
       "main",
@@ -26,12 +34,26 @@
   },
   "direct_commit_refs": [
     {
+      "name": "case/*/*",
+      "ref": "refs/heads/case/*/*",
+      "ref_regex": "^refs/heads/case/.+/.+$"
+    },
+    {
       "name": "feat/*",
       "ref": "refs/heads/feat/*",
       "ref_regex": "^refs/heads/feat/.+$"
     }
   ],
   "merge_rules": [
+    {
+      "id": "case/*/* to feat/*",
+      "source": "case/*/*",
+      "source_ref": "refs/heads/case/*/*",
+      "source_ref_regex": "^refs/heads/case/.+/.+$",
+      "target": "feat/*",
+      "target_ref": "refs/heads/feat/*",
+      "target_ref_regex": "^refs/heads/feat/.+$"
+    },
     {
       "id": "dev to feat/*",
       "source": "dev",
@@ -45,9 +67,9 @@
     {
       "id": "feat/* to dev",
       "source": "feat/*",
-      "source_must_contain_target": true,
       "source_ref": "refs/heads/feat/*",
       "source_ref_regex": "^refs/heads/feat/.+$",
+      "sync_merge_required": true,
       "target": "dev",
       "target_ref": "refs/heads/dev",
       "target_ref_regex": "^refs/heads/dev$"
@@ -75,6 +97,17 @@
     "refs/heads/main"
   ],
   "required_targets": [
+    {
+      "source": "case/*/*",
+      "source_ref": "refs/heads/case/*/*",
+      "source_ref_regex": "^refs/heads/case/.+/.+$",
+      "target_refs": [
+        "refs/heads/feat/*"
+      ],
+      "targets": [
+        "feat/*"
+      ]
+    },
     {
       "source": "feat/*",
       "source_ref": "refs/heads/feat/*",
