@@ -6,6 +6,9 @@
   "pre_push": {
     "auto_push_missing_tags": true
   },
+  "protected_branches": {
+    "enabled": true
+  },
   "runtime": {
     "auto_sync": true
   },

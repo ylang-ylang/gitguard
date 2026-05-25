@@ -23,6 +23,9 @@ DEFAULT_CONFIG = {
     "pre_push": {
         "auto_push_missing_tags": True,
     },
+    "protected_branches": {
+        "enabled": True,
+    },
     "runtime": {
         "auto_sync": True,
     },
@@ -153,8 +156,23 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
         write_text_if_different(policy_path, json.dumps(policy, indent=2, sort_keys=True) + "\n"),
     )
     record_change(changes, ".git-guard/config.json", ensure_config_defaults(config_path))
+    config = load_config(config_path)
+    placeholder_path = branch_log_placeholder_path(repo, config) if os.environ.get("GG_RUNTIME_SYNC_ACTIVE") != "1" else None
+    if placeholder_path:
+        record_change(
+            changes,
+            placeholder_path.relative_to(repo).as_posix(),
+            ensure_branch_log_placeholder(repo, placeholder_path, config),
+        )
 
     hook_path = hook_dir / "reference-transaction"
+    common_hook_path = hook_dir / "common.sh"
+    record_change(
+        changes,
+        ".git-guard/hooks/common.sh",
+        write_text_if_different(common_hook_path, hook_common_script()),
+    )
+
     record_change(
         changes,
         ".git-guard/hooks/reference-transaction",
@@ -173,6 +191,13 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
         changes,
         ".git-guard/hooks/pre-commit",
         write_text_if_different(pre_commit_path, pre_commit_hook(), mode=0o755),
+    )
+
+    pre_merge_commit_path = hook_dir / "pre-merge-commit"
+    record_change(
+        changes,
+        ".git-guard/hooks/pre-merge-commit",
+        write_text_if_different(pre_merge_commit_path, pre_merge_commit_hook(), mode=0o755),
     )
 
     enable_path = install_dir / "enable.sh"
@@ -233,6 +258,19 @@ def ensure_config_defaults(path: Path) -> bool:
     return False
 
 
+def load_config(path: Path) -> dict[str, Any]:
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise InstallError(f"config is not valid JSON: {path}\n{exc}") from exc
+    except OSError as exc:
+        raise InstallError(f"cannot read config: {path}\n{exc}") from exc
+
+    if not isinstance(config, dict):
+        raise InstallError(f"config must be a JSON object: {path}")
+    return config
+
+
 def merge_defaults(config: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
     merged = dict(config)
     for key, default_value in defaults.items():
@@ -244,32 +282,96 @@ def merge_defaults(config: dict[str, Any], defaults: dict[str, Any]) -> dict[str
     return merged
 
 
+def branch_log_placeholder_path(repo: Path, config: dict[str, Any]) -> Path | None:
+    section = config.get("branch_logs", {})
+    if not isinstance(section, dict):
+        return None
+    if section.get("force_required", DEFAULT_CONFIG["branch_logs"]["force_required"]) is not True:
+        return None
+
+    raw_path = section.get("path", DEFAULT_CONFIG["branch_logs"]["path"])
+    if not isinstance(raw_path, str):
+        return None
+
+    path = raw_path.strip().replace("\\", "/")
+    if not path.endswith("/"):
+        return None
+    path = path.rstrip("/")
+    if not valid_repo_relative_path(path):
+        return None
+
+    return repo / path / ".gitkeep"
+
+
+def valid_repo_relative_path(path: str) -> bool:
+    if not path:
+        return False
+    if path.startswith("/") or path == "." or path.startswith("../") or "/../" in path or path.endswith("/.."):
+        return False
+    if path == ".git" or path.startswith(".git/"):
+        return False
+    return True
+
+
+def ensure_branch_log_placeholder(repo: Path, placeholder_path: Path, config: dict[str, Any]) -> bool:
+    placeholder = placeholder_path.relative_to(repo).as_posix()
+    if git_literal_pathspec(repo, "ls-files", "--cached", "--", placeholder).stdout.splitlines():
+        return False
+    return write_text_if_different(placeholder_path, "")
+
+
 def reference_transaction_hook() -> str:
     return "\n".join(
         [
             "#!/usr/bin/env bash",
             "set -eu",
-            'repo_root="$(git rev-parse --show-toplevel)"',
-            'git_dir="$(git rev-parse --git-dir)"',
-            'case "$git_dir" in',
-            '  /*) resolved_git_dir="$git_dir" ;;',
-            '  *) resolved_git_dir="$repo_root/$git_dir" ;;',
-            "esac",
-            'export GG_REPO_PATH="$repo_root"',
-            'export GG_POLICY_JSON="$repo_root/.git-guard/policy.json"',
-            'export GG_CONFIG_JSON="$repo_root/.git-guard/config.json"',
-            'export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
-            'export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
-            'runtime="$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py"',
-            *runtime_sync_shell_function(),
+            *source_common_hook_script(),
             'if [ "${1:-}" = "prepared" ]; then',
             "  git_guard_runtime_sync",
             "fi",
-            '[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
-            'exec python3 "$runtime" "$@"',
+            'git_guard_exec_runtime "$@"',
             "",
         ]
     )
+
+
+def hook_common_script() -> str:
+    return "\n".join(
+        [
+            "# Shared git-guard hook helpers. Source this file from hook wrappers.",
+            "git_guard_setup() {",
+            '  GG_REPO_ROOT="$(git rev-parse --show-toplevel)"',
+            '  git_dir="$(git rev-parse --git-dir)"',
+            '  case "$git_dir" in',
+            '    /*) resolved_git_dir="$git_dir" ;;',
+            '    *) resolved_git_dir="$GG_REPO_ROOT/$git_dir" ;;',
+            "  esac",
+            '  export GG_REPO_PATH="$GG_REPO_ROOT"',
+            '  export GG_POLICY_JSON="$GG_REPO_ROOT/.git-guard/policy.json"',
+            '  export GG_CONFIG_JSON="$GG_REPO_ROOT/.git-guard/config.json"',
+            '  export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
+            '  export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
+            '  GG_RUNTIME="$GG_REPO_ROOT/.git-guard/runtime/policy_reference_transaction_hook.py"',
+            "}",
+            "",
+            "git_guard_exec_runtime() {",
+            '  [ -f "$GG_RUNTIME" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
+            '  exec python3 "$GG_RUNTIME" "$@"',
+            "}",
+            "",
+            *runtime_sync_shell_function(),
+            "",
+            "git_guard_setup",
+            "",
+        ]
+    )
+
+
+def source_common_hook_script() -> list[str]:
+    return [
+        'hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+        '. "$hook_dir/common.sh"',
+    ]
 
 
 def runtime_sync_shell_function() -> list[str]:
@@ -286,7 +388,7 @@ def runtime_sync_shell_function() -> list[str]:
         '    worktree|local|global) ;;',
         '    *) scope="local" ;;',
         "  esac",
-        '  if ! GG_RUNTIME_SYNC_ACTIVE=1 "${git_guard_args[@]}" install --repo "$repo_root" --config "$repo_root/.git-guard/contribution.md" --scope "$scope" >/dev/null; then',
+        '  if ! GG_RUNTIME_SYNC_ACTIVE=1 "${git_guard_args[@]}" install --repo "$GG_REPO_ROOT" --config "$GG_REPO_ROOT/.git-guard/contribution.md" --scope "$scope" >/dev/null; then',
         '    printf "%s\\n" "git-guard: runtime auto-sync failed; continuing with installed runtime" >&2',
         "  fi",
         "}",
@@ -298,22 +400,9 @@ def pre_push_hook() -> str:
         [
             "#!/usr/bin/env bash",
             "set -eu",
-            'repo_root="$(git rev-parse --show-toplevel)"',
-            'git_dir="$(git rev-parse --git-dir)"',
-            'case "$git_dir" in',
-            '  /*) resolved_git_dir="$git_dir" ;;',
-            '  *) resolved_git_dir="$repo_root/$git_dir" ;;',
-            "esac",
-            'export GG_REPO_PATH="$repo_root"',
-            'export GG_POLICY_JSON="$repo_root/.git-guard/policy.json"',
-            'export GG_CONFIG_JSON="$repo_root/.git-guard/config.json"',
-            'export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
-            'export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
-            'runtime="$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py"',
-            *runtime_sync_shell_function(),
+            *source_common_hook_script(),
             "git_guard_runtime_sync",
-            '[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
-            'exec python3 "$runtime" pre-push "$@"',
+            'git_guard_exec_runtime pre-push "$@"',
             "",
         ]
     )
@@ -324,22 +413,22 @@ def pre_commit_hook() -> str:
         [
             "#!/usr/bin/env bash",
             "set -eu",
-            'repo_root="$(git rev-parse --show-toplevel)"',
-            'git_dir="$(git rev-parse --git-dir)"',
-            'case "$git_dir" in',
-            '  /*) resolved_git_dir="$git_dir" ;;',
-            '  *) resolved_git_dir="$repo_root/$git_dir" ;;',
-            "esac",
-            'export GG_REPO_PATH="$repo_root"',
-            'export GG_POLICY_JSON="$repo_root/.git-guard/policy.json"',
-            'export GG_CONFIG_JSON="$repo_root/.git-guard/config.json"',
-            'export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
-            'export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
-            'runtime="$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py"',
-            *runtime_sync_shell_function(),
+            *source_common_hook_script(),
             "git_guard_runtime_sync",
-            '[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
-            'exec python3 "$runtime" pre-commit',
+            "git_guard_exec_runtime pre-commit",
+            "",
+        ]
+    )
+
+
+def pre_merge_commit_hook() -> str:
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -eu",
+            *source_common_hook_script(),
+            "git_guard_runtime_sync",
+            "git_guard_exec_runtime pre-merge-commit",
             "",
         ]
     )
@@ -488,6 +577,22 @@ def resolved_git_dir(repo: Path) -> Path:
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if check and result.returncode != 0:
+        raise InstallError(f"git {' '.join(args)} failed in {repo}\n{result.stderr.strip()}")
+    return result
+
+
+def git_literal_pathspec(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["GIT_LITERAL_PATHSPECS"] = "1"
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
