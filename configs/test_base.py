@@ -95,9 +95,11 @@ class PolicyHookTestBase:
             self.repo / ".git-guard" / "config.json",
             self.repo / ".git-guard" / "policy.json",
             self.repo / ".git-guard" / "enable.sh",
+            self.repo / ".git-guard" / "hooks" / "common.sh",
             self.repo / ".git-guard" / "hooks" / "reference-transaction",
             self.repo / ".git-guard" / "hooks" / "pre-push",
             self.repo / ".git-guard" / "hooks" / "pre-commit",
+            self.repo / ".git-guard" / "hooks" / "pre-merge-commit",
             self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py",
         ]
         for path in expected_files:
@@ -122,18 +124,24 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: config should enable linked worktree branch creation guard by default")
         if config.get("pre_push", {}).get("auto_push_missing_tags") is not True:
             raise AssertionError(f"{self.name}: config should enable missing tag auto-push by default")
+        if config.get("protected_branches", {}).get("enabled") is not True:
+            raise AssertionError(f"{self.name}: config should enable protected branch guards by default")
         if config.get("runtime", {}).get("auto_sync") is not True:
             raise AssertionError(f"{self.name}: config should enable runtime auto-sync by default")
         if config.get("submodules", {}).get("allowed_branches") != ["main", "case/*/*"]:
             raise AssertionError(f"{self.name}: config should default submodule allowed branches to main and case/*/*")
         if config.get("submodules", {}).get("main_guard") is not True:
             raise AssertionError(f"{self.name}: config should enable submodule main guard by default")
-        for hook_name in ["reference-transaction", "pre-push", "pre-commit"]:
+        common_hook_text = (self.repo / ".git-guard" / "hooks" / "common.sh").read_text(encoding="utf-8")
+        if "git_guard_runtime_sync" not in common_hook_text:
+            raise AssertionError(f"{self.name}: common hook helper should include runtime auto-sync")
+        if "GIT_GUARD_BIN" not in common_hook_text:
+            raise AssertionError(f"{self.name}: common hook helper should support GIT_GUARD_BIN")
+        for hook_name in ["reference-transaction", "pre-push", "pre-commit", "pre-merge-commit"]:
             hook_text = (self.repo / ".git-guard" / "hooks" / hook_name).read_text(encoding="utf-8")
-            if "git_guard_runtime_sync" not in hook_text:
-                raise AssertionError(f"{self.name}: {hook_name} hook should include runtime auto-sync")
-            if "GIT_GUARD_BIN" not in hook_text:
-                raise AssertionError(f"{self.name}: {hook_name} hook should support GIT_GUARD_BIN")
+            if ". \"$hook_dir/common.sh\"" not in hook_text:
+                raise AssertionError(f"{self.name}: {hook_name} hook should source common hook helper")
+        self.assert_install_creates_required_branch_log_placeholder()
         self.assert_install_is_idempotent_and_preserves_config()
         self.assert_local_install_clears_worktree_hooks_path_override()
         self.assert_runtime_auto_sync_repairs_installed_runtime()
@@ -149,6 +157,23 @@ class PolicyHookTestBase:
         worktree_hook_path = self.git_no_hooks("config", "--worktree", "--get", "core.hooksPath", check=False)
         if worktree_hook_path.returncode == 0:
             raise AssertionError(f"{self.name}: enable.sh should not set worktree hooksPath: {worktree_hook_path.stdout.strip()}")
+
+    def assert_install_creates_required_branch_log_placeholder(self) -> None:
+        placeholder_repo = self.work_root.parent / f"{self.name}-install-placeholder"
+        if placeholder_repo.exists() and not self.keep:
+            shutil.rmtree(placeholder_repo)
+        placeholder_repo.mkdir(parents=True, exist_ok=True)
+        git_raw(placeholder_repo, "init", "-b", "main")
+        git_raw(placeholder_repo, "config", "user.name", "Policy Hook Test")
+        git_raw(placeholder_repo, "config", "user.email", "policy-hook-test@example.invalid")
+        (placeholder_repo / "README.md").write_text("placeholder install repo\n", encoding="utf-8")
+        git_raw(placeholder_repo, "add", "README.md")
+        git_raw(placeholder_repo, "commit", "-m", "start")
+
+        install_policy_hook(placeholder_repo, self.config_dir, scope="worktree")
+        placeholder = placeholder_repo / ".branch_logs" / ".gitkeep"
+        if not placeholder.exists():
+            raise AssertionError(f"{self.name}: install should create required branch log placeholder: {placeholder}")
 
     def assert_local_install_clears_worktree_hooks_path_override(self) -> None:
         self.git_no_hooks("config", "--worktree", "core.hooksPath", ".git-flow-guard/hooks")
@@ -184,6 +209,8 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: reinstall should preserve/add branch_logs.force_required=true")
         if updated.get("pre_push", {}).get("auto_push_missing_tags") is not True:
             raise AssertionError(f"{self.name}: reinstall should preserve/add pre_push defaults")
+        if updated.get("protected_branches", {}).get("enabled") is not True:
+            raise AssertionError(f"{self.name}: reinstall should preserve/add protected branch defaults")
         if updated.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
             raise AssertionError(f"{self.name}: reinstall should preserve/add worktree defaults")
         if updated.get("submodules", {}).get("allowed_branches") != ["main", "case/*/*"]:
@@ -650,14 +677,11 @@ class PolicyHookTestBase:
             self.git_no_hooks("checkout", current)
 
     def ensure_current_branch_log_staged(self) -> None:
-        branch = self.git_no_hooks("branch", "--show-current").stdout.strip()
-        if not branch:
-            return
-        filename = f".branch_logs/{branch_log_slug(branch)}.md"
+        filename = ".branch_logs/.gitkeep"
         path = self.repo / filename
         if path.exists():
             return
-        self.write_file(filename, f"# {branch}\n\nbranch-local test log\n")
+        self.write_file(filename, "")
         self.git_no_hooks("add", filename)
 
     def conflicted_paths(self) -> list[str]:
@@ -666,16 +690,14 @@ class PolicyHookTestBase:
 
     def restore_target_branch_log_tree(self, target_old: str = "HEAD") -> None:
         path = ".branch_logs"
-        target_had_branch_logs = self.git_no_hooks("cat-file", "-e", f"{target_old}:{path}", check=False).returncode == 0
         self.git_no_hooks("rm", "-r", "--cached", "--ignore-unmatch", path)
         branch_log_path = self.repo / path
         if branch_log_path.is_dir():
             shutil.rmtree(branch_log_path)
         elif branch_log_path.exists():
             branch_log_path.unlink()
-        if target_had_branch_logs:
-            self.git_no_hooks("checkout", target_old, "--", path)
-            self.git_no_hooks("add", path)
+        self.write_file(".branch_logs/.gitkeep", "")
+        self.git_no_hooks("add", ".branch_logs/.gitkeep")
 
     def create_branch(self, branch: str, source: str) -> None:
         self.git("checkout", source)
@@ -743,11 +765,6 @@ def git_raw(cwd: Path, *args: str, check: bool = True) -> CommandResult:
 
 def ref_exists(cwd: Path, ref: str) -> bool:
     return git_raw(cwd, "show-ref", "--verify", "--quiet", ref, check=False).returncode == 0
-
-
-def branch_log_slug(branch: str) -> str:
-    return branch.replace("/", "__").replace("@", "_")
-
 
 def run_raw(cwd: Path, args: list[str], check: bool = True) -> CommandResult:
     env = os.environ.copy()
