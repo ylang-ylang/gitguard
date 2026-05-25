@@ -74,7 +74,7 @@ If the same source and target appear once without `tag:"..."` and once with `tag
 
 For tag policies, Git Guard follows the Mermaid merge direction: `checkout TARGET` followed by `merge SOURCE tag:"..."` means the tag must point at the merge result on `TARGET`. For example, `checkout main` then `merge dev tag:"V#.#"` expects `V#.#` to point at the relevant `main` commit, not the `dev` head.
 
-For `feat/*` and `infra/*`, a reverse merge before the normal merge declares a source freshness rule. `checkout "feat/*"` followed by `merge dev` before `checkout dev` and `merge "feat/*"` means feature branches must absorb the current `dev` before they can merge back into `dev`.
+For `feat/*` and `infra/*`, an immediately adjacent reverse merge before the normal merge declares `sync_merge_required`. `checkout "feat/*"` followed by `merge dev`, then `checkout dev` and `merge "feat/*"`, means feature branches must finish with a sync merge from the current `dev` before they can merge back into `dev`. If the feature branch commits again after that sync merge, it must sync `dev` again before merging back.
 
 Wildcard branch families should be quoted:
 
@@ -203,7 +203,7 @@ Optional tag rules do not create pending tag requirements. If a matching tag is 
 
 Policy-managed branches cannot be moved to include another managed branch head unless the Mermaid graph declares that merge direction. This is independent of merge strategy: normal allowed merges may be fast-forward or `--no-ff`. For example, if the graph has `dev to main` but no `main to dev`, `git branch -f dev main` is rejected even when the underlying ref move is a fast-forward.
 
-If a `feat/*` or `infra/*` rule has a prior reverse sync merge in the Mermaid graph, the protected target merge also checks that the source contains the target's current old head. A stale source branch is rejected with `MERGE_SOURCE_BEHIND_TARGET`; merge the target branch into the source branch and resolve conflicts there before merging back.
+If a `feat/*` or `infra/*` rule has an immediately adjacent reverse sync merge in the Mermaid graph, the protected target merge is rejected with `SYNC_MERGE_REQUIRED` unless the source is already based on the target's current old head or the source head is the merge commit that just merged that target old head into the source. Merge the target branch into the source branch as the final source-branch step before merging back.
 
 Linked worktrees cannot create new local branches while the hook is enabled. A linked worktree is detected when `git rev-parse --git-dir` and `git rev-parse --git-common-dir` resolve to different directories. In that case, `git branch new-name`, `git switch -c new-name`, and other branch-creation ref transactions are rejected with `WORKTREE_BRANCH_CREATION_NOT_ALLOWED`. Create the new branch from the main worktree and give it its own worktree directory instead.
 
