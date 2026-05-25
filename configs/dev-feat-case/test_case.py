@@ -10,8 +10,8 @@ from configs.test_base import PolicyHookTestBase, run_raw
 START_SYMBOL = "=========== GIT GUARD REJECTION TESTS START ==========="
 
 
-class DevFeatHookTest(PolicyHookTestBase):
-    config_name = "dev-feat"
+class DevFeatCaseHookTest(PolicyHookTestBase):
+    config_name = "dev-feat-case"
 
     def create_initial_repo(self) -> None:
         self.git("init", "-b", "main")
@@ -34,6 +34,7 @@ class DevFeatHookTest(PolicyHookTestBase):
 
     def create_rejection_test_fixtures(self) -> None:
         self.create_unmerged_feature_fixture()
+        self.create_case_reject_to_dev_fixture()
 
     def mark_rejection_tests_start(self) -> None:
         branch = "feat/test-start"
@@ -44,9 +45,19 @@ class DevFeatHookTest(PolicyHookTestBase):
 
     def run_rejection_tests(self) -> None:
         self.expect_rejected(["branch", "feat/from-main", "main"], "BRANCH_SOURCE_MISMATCH")
+        self.expect_rejected(["branch", "case/from-dev/bad", "dev"], "BRANCH_SOURCE_MISMATCH")
+        self.expect_rejected(["branch", "case/missing-topic", "dev"], "BRANCH_NAME_NOT_ALLOWED")
+        self.expect_rejected(["branch", "case/from-feature/bad", "feat/unmerged"], "BRANCH_SOURCE_MISMATCH")
         self.expect_rejected(["branch", "wrong/test", "dev"], "BRANCH_NAME_NOT_ALLOWED")
         self.expect_rejected(["branch", "release/demo", "dev"], "BRANCH_NAME_NOT_ALLOWED")
         self.expect_illegal_branch_rename_rejected()
+
+        self.git("checkout", "dev")
+        self.expect_rejected(
+            ["merge", "--no-ff", "--no-edit", "case/dev-context/reject-to-dev"],
+            "PROTECTED_REF_NO_ALLOWED_SOURCE",
+            cleanup=self.cleanup_merge_state,
+        )
 
         self.git("checkout", "dev")
         self.expect_rejected(
@@ -86,8 +97,14 @@ class DevFeatHookTest(PolicyHookTestBase):
         self.expect_rejected(["branch", "-m", branch, "wrong/renamed"], "BRANCH_NAME_NOT_ALLOWED")
 
     def create_feature_release(self) -> None:
+        main_case_branch = "case/main-context/bootstrap"
+        self.create_branch(main_case_branch, "main")
+        main_case_sha = self.commit_file(main_case_branch, "case-main.txt", "case from main\n", "case work from main")
+        self.assert_branch_base_source(main_case_branch, "refs/heads/main")
+
         branch = "feat/initial"
         self.create_branch(branch, "dev")
+        self.merge_to(main_case_branch, branch)
         self.feature_sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
 
         advance_branch = "feat/dev-advance"
@@ -101,6 +118,7 @@ class DevFeatHookTest(PolicyHookTestBase):
         self.merge_to("dev", "main")
         self.main_release_sha = self.rev_parse("main")
         self.tag("V1.0", self.main_release_sha)
+        self.assert_is_ancestor(main_case_sha, branch)
         self.assert_is_ancestor(self.feature_sha, "dev")
         self.assert_is_ancestor(dev_advance_sha, branch)
         self.assert_is_ancestor(self.dev_release_sha, "main")
@@ -115,6 +133,21 @@ class DevFeatHookTest(PolicyHookTestBase):
             "unmerged feature\n",
             "fixture unmerged feature",
         )
+
+    def create_case_reject_to_dev_fixture(self) -> None:
+        branch = "case/dev-context/reject-to-dev"
+        self.create_branch(branch, "main")
+        self.commit_file(branch, "case-reject-dev.txt", "case reject dev\n", "fixture case reject to dev")
+
+    def assert_branch_base_source(self, branch: str, source_ref: str) -> None:
+        branch_ref = f"refs/heads/{branch}"
+        branch_base = self.state().get("branch_bases", {}).get(branch_ref)
+        if branch_base is None:
+            raise AssertionError(f"{self.name}: expected branch base state for {branch_ref}")
+        if branch_base.get("source_ref") != source_ref:
+            raise AssertionError(
+                f"{self.name}: expected {branch_ref} source {source_ref}, got {json.dumps(branch_base, indent=2, sort_keys=True)}"
+            )
 
     def create_pending_dev_release(self) -> None:
         self.merge_to("dev", "main")
@@ -197,4 +230,4 @@ class DevFeatHookTest(PolicyHookTestBase):
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-TEST_CASE = DevFeatHookTest
+TEST_CASE = DevFeatCaseHookTest

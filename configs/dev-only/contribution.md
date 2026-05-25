@@ -3,7 +3,12 @@
 ```mermaid
 gitGraph TB:
     commit id:"init"
-    branch dev
+
+    checkout main
+    branch dev order: 1
+    checkout main
+    commit id:"main after dev fork"
+
     checkout dev
     commit id:"dev work"
 
