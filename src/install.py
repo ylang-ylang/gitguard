@@ -16,11 +16,19 @@ from mermaid import PolicyParseError, load_policy_from_markdown
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALID_SCOPES = ("worktree", "local", "global")
 DEFAULT_CONFIG = {
+    "branch_logs": {
+        "path": ".branch_logs/",
+        "force_required": True,
+    },
     "pre_push": {
         "auto_push_missing_tags": True,
     },
     "runtime": {
         "auto_sync": True,
+    },
+    "submodules": {
+        "allowed_branches": ["main", "case/*/*"],
+        "main_guard": True,
     },
     "worktree": {
         "reject_branch_creation_in_linked_worktree": True,
@@ -158,6 +166,13 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
         changes,
         ".git-guard/hooks/pre-push",
         write_text_if_different(pre_push_path, pre_push_hook(), mode=0o755),
+    )
+
+    pre_commit_path = hook_dir / "pre-commit"
+    record_change(
+        changes,
+        ".git-guard/hooks/pre-commit",
+        write_text_if_different(pre_commit_path, pre_commit_hook(), mode=0o755),
     )
 
     enable_path = install_dir / "enable.sh"
@@ -299,6 +314,32 @@ def pre_push_hook() -> str:
             "git_guard_runtime_sync",
             '[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
             'exec python3 "$runtime" pre-push "$@"',
+            "",
+        ]
+    )
+
+
+def pre_commit_hook() -> str:
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -eu",
+            'repo_root="$(git rev-parse --show-toplevel)"',
+            'git_dir="$(git rev-parse --git-dir)"',
+            'case "$git_dir" in',
+            '  /*) resolved_git_dir="$git_dir" ;;',
+            '  *) resolved_git_dir="$repo_root/$git_dir" ;;',
+            "esac",
+            'export GG_REPO_PATH="$repo_root"',
+            'export GG_POLICY_JSON="$repo_root/.git-guard/policy.json"',
+            'export GG_CONFIG_JSON="$repo_root/.git-guard/config.json"',
+            'export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
+            'export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
+            'runtime="$repo_root/.git-guard/runtime/policy_reference_transaction_hook.py"',
+            *runtime_sync_shell_function(),
+            "git_guard_runtime_sync",
+            '[ -f "$runtime" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
+            'exec python3 "$runtime" pre-commit',
             "",
         ]
     )

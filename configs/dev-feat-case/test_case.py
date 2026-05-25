@@ -10,8 +10,8 @@ from configs.test_base import PolicyHookTestBase, run_raw
 START_SYMBOL = "=========== GIT GUARD REJECTION TESTS START ==========="
 
 
-class DevFeatHookTest(PolicyHookTestBase):
-    config_name = "dev-feat"
+class DevFeatCaseHookTest(PolicyHookTestBase):
+    config_name = "dev-feat-case"
 
     def create_initial_repo(self) -> None:
         self.git("init", "-b", "main")
@@ -34,6 +34,7 @@ class DevFeatHookTest(PolicyHookTestBase):
 
     def create_rejection_test_fixtures(self) -> None:
         self.create_unmerged_feature_fixture()
+        self.create_case_reject_to_dev_fixture()
 
     def mark_rejection_tests_start(self) -> None:
         branch = "feat/test-start"
@@ -44,7 +45,15 @@ class DevFeatHookTest(PolicyHookTestBase):
 
     def run_rejection_tests(self) -> None:
         self.expect_rejected(["branch", "feat/from-main", "main"], "BRANCH_SOURCE_MISMATCH")
+        self.expect_rejected(["branch", "case/from-dev/bad", "dev"], "BRANCH_SOURCE_MISMATCH")
+        self.expect_rejected(["branch", "case/missing-topic", "dev"], "BRANCH_NAME_NOT_ALLOWED")
+        self.expect_rejected(["branch", "case/from-feature/bad", "feat/unmerged"], "BRANCH_SOURCE_MISMATCH")
+        self.expect_rejected(["branch", "wrong/test", "dev"], "BRANCH_NAME_NOT_ALLOWED")
         self.expect_rejected(["branch", "release/demo", "dev"], "BRANCH_NAME_NOT_ALLOWED")
+        self.expect_illegal_branch_rename_rejected()
+
+        self.git("checkout", "dev")
+        self.expect_merge_rejected("case/dev-context/reject-to-dev", "PROTECTED_REF_NO_ALLOWED_SOURCE")
 
         self.git("checkout", "dev")
         self.expect_rejected(
@@ -74,13 +83,26 @@ class DevFeatHookTest(PolicyHookTestBase):
         self.assert_pending_tag_count(0)
         self.assert_pre_push_auto_syncs_release_tags()
         self.assert_pre_push_auto_sync_can_be_disabled()
+        self.assert_branch_log_pre_commit_guards()
+        self.assert_branch_log_target_invariant_on_merge()
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
 
+    def expect_illegal_branch_rename_rejected(self) -> None:
+        branch = "feat/rename-guard"
+        self.create_branch(branch, "dev")
+        self.expect_rejected(["branch", "-m", branch, "wrong/renamed"], "BRANCH_NAME_NOT_ALLOWED")
+
     def create_feature_release(self) -> None:
+        main_case_branch = "case/main-context/bootstrap"
+        self.create_branch(main_case_branch, "main")
+        main_case_sha = self.commit_file(main_case_branch, "case-main.txt", "case from main\n", "case work from main")
+        self.assert_branch_base_source(main_case_branch, "refs/heads/main")
+
         branch = "feat/initial"
         self.create_branch(branch, "dev")
+        self.merge_to(main_case_branch, branch)
         self.feature_sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
 
         advance_branch = "feat/dev-advance"
@@ -94,6 +116,7 @@ class DevFeatHookTest(PolicyHookTestBase):
         self.merge_to("dev", "main")
         self.main_release_sha = self.rev_parse("main")
         self.tag("V1.0", self.main_release_sha)
+        self.assert_is_ancestor(main_case_sha, branch)
         self.assert_is_ancestor(self.feature_sha, "dev")
         self.assert_is_ancestor(dev_advance_sha, branch)
         self.assert_is_ancestor(self.dev_release_sha, "main")
@@ -108,6 +131,21 @@ class DevFeatHookTest(PolicyHookTestBase):
             "unmerged feature\n",
             "fixture unmerged feature",
         )
+
+    def create_case_reject_to_dev_fixture(self) -> None:
+        branch = "case/dev-context/reject-to-dev"
+        self.create_branch(branch, "main")
+        self.commit_file(branch, "case-reject-dev.txt", "case reject dev\n", "fixture case reject to dev")
+
+    def assert_branch_base_source(self, branch: str, source_ref: str) -> None:
+        branch_ref = f"refs/heads/{branch}"
+        branch_base = self.state().get("branch_bases", {}).get(branch_ref)
+        if branch_base is None:
+            raise AssertionError(f"{self.name}: expected branch base state for {branch_ref}")
+        if branch_base.get("source_ref") != source_ref:
+            raise AssertionError(
+                f"{self.name}: expected {branch_ref} source {source_ref}, got {json.dumps(branch_base, indent=2, sort_keys=True)}"
+            )
 
     def create_pending_dev_release(self) -> None:
         self.merge_to("dev", "main")
@@ -124,7 +162,7 @@ class DevFeatHookTest(PolicyHookTestBase):
             "pending dev move",
         )
         self.git("checkout", "dev")
-        self.git("merge", "--no-ff", "--no-edit", branch)
+        self.merge_to(branch, "dev")
 
     def expect_pending_main_target_move_rejected(self) -> None:
         self.git("checkout", "main")
@@ -189,5 +227,115 @@ class DevFeatHookTest(PolicyHookTestBase):
         config.setdefault("pre_push", {})["auto_push_missing_tags"] = True
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
+    def assert_branch_log_pre_commit_guards(self) -> None:
+        branch = "feat/log-tracking"
+        self.create_branch(branch, "dev")
+        self.write_file(".branch_logs/untracked.md", "untracked branch log\n")
+        self.write_file("log-tracking.txt", "work\n")
+        self.git("add", "log-tracking.txt")
 
-TEST_CASE = DevFeatHookTest
+        result = self.git("commit", "-m", "missing staged branch log", check=False)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "BRANCH_LOG_UNTRACKED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected untracked branch log rejection\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+
+        self.git("add", ".branch_logs/untracked.md")
+        self.git("commit", "-m", "track branch log")
+
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        required_branch = "feat/log-required"
+        self.create_branch(required_branch, "dev")
+        self.git("rm", "-r", ".branch_logs")
+        self.write_file("log-required.txt", "work\n")
+        self.git("add", "log-required.txt")
+        result = self.git("commit", "-m", "missing required branch log", check=False)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "BRANCH_LOG_REQUIRED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected required branch log rejection\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        self.git_no_hooks("reset", "--hard", "HEAD")
+
+        self.write_file(".branch_logs/required.md", "required branch log\n")
+        self.write_file("log-required.txt", "work\n")
+        self.git("add", "log-required.txt")
+        self.git("add", ".branch_logs/required.md")
+        self.git("commit", "-m", "add required branch log")
+
+        config.setdefault("branch_logs", {})["path"] = ".branch-log.md"
+        config.setdefault("branch_logs", {})["force_required"] = True
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        required_file_branch = "feat/log-required-file"
+        self.create_branch(required_file_branch, "dev")
+        self.write_file("log-required-file.txt", "work\n")
+        self.git("add", "log-required-file.txt")
+        result = self.git("commit", "-m", "missing required branch log file", check=False)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "BRANCH_LOG_REQUIRED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected required branch log file rejection\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+
+        self.write_file(".branch-log.md", "required branch log file\n")
+        self.git("add", ".branch-log.md")
+        self.git("commit", "-m", "add required branch log file")
+
+        config.setdefault("branch_logs", {})["path"] = ".branch_logs/"
+        config.setdefault("branch_logs", {})["force_required"] = True
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def assert_branch_log_target_invariant_on_merge(self) -> None:
+        branch = "feat/log-drop"
+        self.create_branch(branch, "dev")
+        self.commit_file(branch, "log-drop-feature.txt", "feature\n", "feature with branch log")
+        self.commit_file(branch, ".branch_logs/log-drop.md", "branch-local log\n", "record branch log")
+
+        self.git("checkout", "dev")
+        self.expect_rejected(
+            ["merge", "--no-ff", "--no-edit", branch],
+            "BRANCH_LOG_TARGET_CHANGED",
+            cleanup=self.cleanup_merge_state,
+        )
+
+        self.git("checkout", "dev")
+        self.git("merge", "--no-ff", "--no-commit", branch)
+        self.restore_target_branch_log_tree()
+        self.git("commit", "-m", f"MR {branch} to dev without branch log")
+
+        if (self.repo / ".branch_logs" / "log-drop.md").exists():
+            raise AssertionError(f"{self.name}: source branch log leaked into dev")
+
+        self.assert_branch_log_target_invariant_on_sync_merge()
+
+    def assert_branch_log_target_invariant_on_sync_merge(self) -> None:
+        clean_dev_sha = self.rev_parse("dev")
+        branch = "feat/log-sync-target"
+        self.create_branch(branch, "dev")
+        self.commit_file(branch, "log-sync-target.txt", "feature work\n", "feature work before sync")
+        target_log_sha = self.commit_file(branch, ".branch_logs/target.md", "target-local log\n", "record target branch log")
+
+        self.git("checkout", "dev")
+        self.write_file(".branch_logs/dev-source.md", "source branch log should not propagate\n")
+        self.git_no_hooks("add", ".branch_logs/dev-source.md")
+        self.git_no_hooks("commit", "-m", "seed source branch log with hooks disabled")
+
+        self.git("checkout", branch)
+        self.expect_rejected(
+            ["merge", "--no-ff", "--no-edit", "dev"],
+            "BRANCH_LOG_TARGET_CHANGED",
+            cleanup=self.cleanup_merge_state,
+        )
+        if self.rev_parse(branch) != target_log_sha:
+            raise AssertionError(f"{self.name}: rejected sync merge moved target branch")
+
+        self.git_no_hooks("branch", "-f", "dev", clean_dev_sha)
+
+
+TEST_CASE = DevFeatCaseHookTest

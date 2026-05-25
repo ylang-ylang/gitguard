@@ -7,7 +7,7 @@ START_SYMBOL = "=========== GIT GUARD REJECTION TESTS START ==========="
 
 
 class BasicFeatureReleaseHookTest(PolicyHookTestBase):
-    config_name = "dev-feat-release-hotfix"
+    config_name = "dev-feat-release-hotfix-case"
 
     def create_initial_repo(self) -> None:
         self.git("init", "-b", "main")
@@ -32,6 +32,7 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
 
     def create_rejection_test_fixtures(self) -> None:
         self.create_feat_reject_to_main_fixture()
+        self.create_case_reject_direct_fixture()
         self.create_release_reject_main_before_dev_fixture()
         self.create_old_release_fixture()
 
@@ -43,15 +44,26 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
 
     def run_rejection_tests(self) -> None:
         self.expect_rejected(["branch", "bug/demo", "dev"], "BRANCH_NAME_NOT_ALLOWED")
+        self.expect_rejected(["branch", "case/from-dev/bad", "dev"], "BRANCH_SOURCE_MISMATCH")
+        self.expect_rejected(["branch", "case/missing-topic", "main"], "BRANCH_NAME_NOT_ALLOWED")
+        self.expect_rejected(["branch", "case/from-feature/bad", "feat/reject-to-main"], "BRANCH_SOURCE_MISMATCH")
         self.expect_rejected(["branch", "release/from-main", "main"], "BRANCH_SOURCE_MISMATCH")
         self.expect_rejected(["branch", "hotfix/from-dev", "dev"], "BRANCH_SOURCE_MISMATCH")
 
-        self.git("checkout", "main")
+        self.git("checkout", "dev")
         self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", "feat/reject-to-main"],
+            ["commit", "--allow-empty", "-m", "direct dev commit"],
             "PROTECTED_REF_NO_ALLOWED_SOURCE",
-            cleanup=self.cleanup_merge_state,
         )
+
+        self.git("checkout", "main")
+        self.expect_merge_rejected("feat/reject-to-main", "PROTECTED_REF_NO_ALLOWED_SOURCE")
+
+        self.git("checkout", "dev")
+        self.expect_merge_rejected("case/main-context/reject-direct", "PROTECTED_REF_NO_ALLOWED_SOURCE")
+
+        self.git("checkout", "main")
+        self.expect_merge_rejected("case/main-context/reject-direct", "PROTECTED_REF_NO_ALLOWED_SOURCE")
 
         self.expect_rejected(["tag", "release-1.0.0", "main"], "TAG_TARGET_TAG_PATTERN_MISMATCH")
         self.expect_rejected(
@@ -62,22 +74,33 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
         self.assert_hotfix_wrong_line_rejected()
 
         self.git("checkout", "main")
-        self.expect_rejected(
-            ["merge", "--no-ff", "--no-edit", "release/reject-main-before-dev"],
-            "MULTI_TARGET_ORDER",
-            cleanup=self.cleanup_merge_state,
-        )
+        self.expect_merge_rejected("release/reject-main-before-dev", "MULTI_TARGET_ORDER")
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
 
     def create_feature_flow(self) -> None:
+        case_branch = "case/main-context/export"
+        self.create_branch(case_branch, "main")
+        case_sha = self.commit_file(case_branch, "case-export.txt", "case export\n", "case export")
+
         branch = "feat/export"
         self.create_branch(branch, "dev")
+        self.merge_to(case_branch, branch)
         feature_sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
-        dev_sha = self.commit_file("dev", "dev-during-feature.txt", "dev during feature\n", "dev advances during feature work")
+        dev_advance_branch = "feat/dev-during-feature"
+        self.create_branch(dev_advance_branch, "dev")
+        dev_sha = self.commit_file(
+            dev_advance_branch,
+            "dev-during-feature.txt",
+            "dev during feature\n",
+            "dev advances during feature work",
+        )
+        self.merge_to(dev_advance_branch, "dev")
         self.merge_to("dev", branch)
         self.merge_to(branch, "dev")
+        self.assert_is_ancestor(case_sha, branch)
+        self.assert_is_ancestor(case_sha, "dev")
         self.assert_is_ancestor(feature_sha, "dev")
         self.assert_is_ancestor(dev_sha, branch)
 
@@ -107,6 +130,11 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
         branch = "feat/reject-to-main"
         self.create_branch(branch, "dev")
         self.commit_file(branch, "feature-reject.txt", "feature reject\n", "fixture feat reject")
+
+    def create_case_reject_direct_fixture(self) -> None:
+        branch = "case/main-context/reject-direct"
+        self.create_branch(branch, "main")
+        self.commit_file(branch, "case-reject-direct.txt", "case reject direct\n", "fixture case reject direct")
 
     def create_release_reject_main_before_dev_fixture(self) -> None:
         branch = "release/reject-main-before-dev"
