@@ -15,6 +15,8 @@ from mermaid import PolicyParseError, load_policy_from_markdown
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALID_SCOPES = ("worktree", "local", "global")
+RUNTIME_ENTRYPOINT = "reference_transaction_hook.py"
+INSTALLED_RUNTIME_ENTRYPOINT = "policy_reference_transaction_hook.py"
 DEFAULT_CONFIG = {
     "branch_logs": {
         "path": ".branch_logs/",
@@ -139,12 +141,7 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
     policy_source["path"] = installed_contribution_path.relative_to(repo).as_posix()
     policy_source.pop("original_path", None)
 
-    runtime_runner = runtime_dir / "policy_reference_transaction_hook.py"
-    if runner_path:
-        changed = copy_file_if_different(runner_path, runtime_runner, mode=0o755)
-    else:
-        changed = write_text_if_different(runtime_runner, load_runtime_hook_text(), mode=0o755)
-    record_change(changes, ".git-guard/runtime/policy_reference_transaction_hook.py", changed)
+    install_runtime_files(runtime_dir, runner_path, changes)
 
     policy_path = install_dir / "policy.json"
     config_path = install_dir / "config.json"
@@ -505,8 +502,33 @@ def resolve_config(config: str | Path) -> Path:
     raise InstallError(f"cannot resolve config: {config}")
 
 
+def install_runtime_files(runtime_dir: Path, runner_path: Path | None, changes: list[str]) -> None:
+    runtime_runner = runtime_dir / INSTALLED_RUNTIME_ENTRYPOINT
+    if runner_path:
+        changed = copy_file_if_different(runner_path, runtime_runner, mode=0o755)
+    else:
+        changed = copy_file_if_different(runtime_source_dir() / RUNTIME_ENTRYPOINT, runtime_runner, mode=0o755)
+    record_change(changes, f".git-guard/runtime/{INSTALLED_RUNTIME_ENTRYPOINT}", changed)
+
+    for source in runtime_support_files():
+        target = runtime_dir / source.name
+        record_change(changes, f".git-guard/runtime/{source.name}", copy_file_if_different(source, target))
+
+
+def runtime_source_dir() -> Path:
+    return Path(__file__).resolve().parent / "runtime"
+
+
+def runtime_support_files() -> list[Path]:
+    return sorted(path for path in runtime_source_dir().glob("*.py") if path.name != RUNTIME_ENTRYPOINT)
+
+
+def runtime_support_filenames() -> list[str]:
+    return [path.name for path in runtime_support_files()]
+
+
 def load_runtime_hook_text() -> str:
-    return (Path(__file__).resolve().parent / "runtime" / "reference_transaction_hook.py").read_text(encoding="utf-8")
+    return (runtime_source_dir() / RUNTIME_ENTRYPOINT).read_text(encoding="utf-8")
 
 
 def copy_file_if_different(source: Path, target: Path, mode: int | None = None) -> bool:

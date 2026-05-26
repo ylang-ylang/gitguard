@@ -10,6 +10,7 @@ from typing import Callable, ClassVar
 
 from install import install as install_policy_hook
 from install import load_runtime_hook_text
+from install import runtime_support_filenames
 from mermaid import load_policy_from_markdown
 
 
@@ -102,6 +103,9 @@ class PolicyHookTestBase:
             self.repo / ".git-guard" / "hooks" / "pre-merge-commit",
             self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py",
         ]
+        expected_files.extend(
+            self.repo / ".git-guard" / "runtime" / filename for filename in runtime_support_filenames()
+        )
         for path in expected_files:
             if not path.exists():
                 raise AssertionError(f"{self.name}: installed file is missing: {path}")
@@ -225,6 +229,8 @@ class PolicyHookTestBase:
         runtime_path = self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py"
         runtime_path.write_text("#!/usr/bin/env python3\n# stale runtime sentinel\n", encoding="utf-8")
         runtime_path.chmod(0o755)
+        support_path = self.repo / ".git-guard" / "runtime" / "git_ops.py"
+        support_path.write_text("# stale runtime support sentinel\n", encoding="utf-8")
 
         result = self.git("branch", "forbidden/runtime-auto-sync", "HEAD", check=False)
         combined = result.stdout + result.stderr
@@ -243,8 +249,16 @@ class PolicyHookTestBase:
                 f"{self.name}: expected runtime auto-sync message to name the repaired runtime asset\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
+        if ".git-guard/runtime/git_ops.py" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected runtime auto-sync message to name the repaired runtime support asset\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
         if runtime_path.read_text(encoding="utf-8") != load_runtime_hook_text():
             raise AssertionError(f"{self.name}: runtime auto-sync did not repair installed runtime")
+        expected_support = (PROJECT_ROOT / "src" / "runtime" / "git_ops.py").read_text(encoding="utf-8")
+        if support_path.read_text(encoding="utf-8") != expected_support:
+            raise AssertionError(f"{self.name}: runtime auto-sync did not repair installed runtime support")
 
     def assert_runtime_auto_sync_can_be_disabled(self) -> None:
         config_path = self.repo / ".git-guard" / "config.json"
