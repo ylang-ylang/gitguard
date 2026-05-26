@@ -149,10 +149,12 @@ It copies the packaged runtime hook into the target repo:
 <repo>/.git-guard/config.json
 <repo>/.git-guard/enable.sh
 <repo>/.git-guard/hooks/pre-commit
+<repo>/.git-guard/hooks/pre-merge-commit
 <repo>/.git-guard/hooks/pre-push
 <repo>/.git-guard/hooks/reference-transaction
 <repo>/.git-guard/policy.json
 <repo>/.git-guard/runtime/policy_reference_transaction_hook.py
+<repo>/.git-guard/runtime/*.py
 ```
 
 Installed hook wrappers can refresh these Git Guard managed files when a hook fires. If `.git-guard/config.json` keeps `runtime.auto_sync` enabled, the wrapper resolves the current machine's `git-guard` command and runs install again with the repo-local policy source:
@@ -265,19 +267,7 @@ Because the hook path is repo-relative, a repo generated or installed in Docker 
 Run package-level checks without installation:
 
 ```bash
-PYTHONPATH=src python -m py_compile \
-  src/cli.py \
-  src/install.py \
-  src/mermaid.py \
-  src/runtime/__init__.py \
-  src/runtime/reference_transaction_hook.py \
-  test_env/run_policy_hook_tests.py \
-  configs/__init__.py \
-  configs/test_base.py \
-  configs/dev-only/test_case.py \
-  configs/dev-feat-case/test_case.py \
-  configs/dev-feat-release-hotfix-case/test_case.py \
-  configs/dev-infra-feat-release-hotfix-case/test_case.py
+python3 -m compileall -q src configs test_env
 ```
 
 Run integration tests in Docker:
