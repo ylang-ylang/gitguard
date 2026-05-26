@@ -484,6 +484,7 @@ class PolicyHookTestBase:
         self.git("checkout", target_branch)
         submodule_remote = self.create_submodule_remote()
         self.git("-c", "protocol.file.allow=always", "submodule", "add", str(submodule_remote), "modules/lib")
+        self.ensure_current_branch_log_staged()
         result = self.git("commit", "-m", "add submodule at origin main tip")
         self.assert_output_not_contains(result, "SUBMODULE_")
 
@@ -491,6 +492,7 @@ class PolicyHookTestBase:
         origin_base = self.git_in(submodule, "rev-parse", "--verify", "origin/main~1").stdout.strip()
         self.git_in(submodule, "checkout", "--detach", origin_base)
         self.git("add", "modules/lib")
+        self.ensure_current_branch_log_staged()
         result = self.git("commit", "-m", "pin submodule behind origin main")
         self.assert_output_contains(result, "SUBMODULE_BEHIND_ORIGIN_MAIN")
 
@@ -499,12 +501,14 @@ class PolicyHookTestBase:
         self.git_in(submodule, "add", "local-main.txt")
         self.git_in(submodule, "commit", "-m", "local main only")
         self.git("add", "modules/lib")
+        self.ensure_current_branch_log_staged()
         result = self.git("commit", "-m", "pin submodule to local main")
         self.assert_output_contains(result, "SUBMODULE_NOT_ON_ORIGIN_MAIN_BUT_ON_LOCAL_MAIN")
 
         case_base = self.git_in(submodule, "rev-parse", "--verify", "origin/case/allowed/topic~1").stdout.strip()
         self.git_in(submodule, "checkout", "--detach", case_base)
         self.git("add", "modules/lib")
+        self.ensure_current_branch_log_staged()
         result = self.git("commit", "-m", "pin submodule behind allowed case branch")
         self.assert_output_contains(result, "SUBMODULE_BEHIND_ALLOWED_REMOTE_BRANCH")
         self.assert_output_contains(result, "branch=case/allowed/topic")
@@ -514,6 +518,7 @@ class PolicyHookTestBase:
         self.git_in(submodule, "add", "local-case.txt")
         self.git_in(submodule, "commit", "-m", "local case only")
         self.git("add", "modules/lib")
+        self.ensure_current_branch_log_staged()
         result = self.git("commit", "-m", "pin submodule to local case branch")
         self.assert_output_contains(result, "SUBMODULE_NOT_ON_ALLOWED_REMOTE_BRANCH_BUT_ON_LOCAL_BRANCH")
         self.assert_output_contains(result, "branch=case/local/topic")
@@ -524,6 +529,7 @@ class PolicyHookTestBase:
         self.git_in(submodule, "add", "side.txt")
         self.git_in(submodule, "commit", "-m", "side only")
         self.git("add", "modules/lib")
+        self.ensure_current_branch_log_staged()
         self.expect_rejected(
             ["commit", "-m", "pin submodule to side branch"],
             "SUBMODULE_COMMIT_NOT_ALLOWED",
@@ -533,6 +539,7 @@ class PolicyHookTestBase:
         self.set_submodule_main_guard(False)
         self.git_in(submodule, "checkout", "side")
         self.git("add", "modules/lib")
+        self.ensure_current_branch_log_staged()
         result = self.git("commit", "-m", "submodule guard disabled allows side")
         self.assert_output_not_contains(result, "SUBMODULE_COMMIT_NOT_ALLOWED")
         self.git_no_hooks("reset", "--hard", allowed_parent)
@@ -540,12 +547,14 @@ class PolicyHookTestBase:
         self.git_in(submodule, "checkout", "main")
 
         self.set_submodule_main_guard_legacy_shape()
+        self.ensure_current_branch_log_staged()
         self.expect_rejected(
             ["commit", "--allow-empty", "-m", "legacy submodule main guard shape is invalid"],
             "CONFIG_INVALID",
         )
         self.set_submodule_main_guard(True)
         self.set_submodule_allowed_branches("main")
+        self.ensure_current_branch_log_staged()
         self.expect_rejected(
             ["commit", "--allow-empty", "-m", "submodule allowed branches scalar is invalid"],
             "CONFIG_INVALID",
@@ -555,6 +564,7 @@ class PolicyHookTestBase:
         shutil.rmtree(submodule)
         self.write_file("missing-submodule-check.txt", "missing submodule check\n")
         self.git("add", "missing-submodule-check.txt")
+        self.ensure_current_branch_log_staged()
         self.expect_rejected(
             ["commit", "-m", "missing submodule is rejected"],
             "SUBMODULE_REPO_MISSING",
@@ -677,11 +687,14 @@ class PolicyHookTestBase:
             self.git_no_hooks("checkout", current)
 
     def ensure_current_branch_log_staged(self) -> None:
-        filename = ".branch_logs/.gitkeep"
-        path = self.repo / filename
-        if path.exists():
+        branch = self.git_no_hooks("branch", "--show-current").stdout.strip()
+        if not branch:
             return
-        self.write_file(filename, "")
+        filename = f".branch_logs/{branch_log_slug(branch)}.md"
+        path = self.repo / filename
+        previous = path.read_text(encoding="utf-8") if path.exists() else f"# {branch}\n"
+        head = self.git_no_hooks("rev-parse", "--short", "HEAD").stdout.strip()
+        self.write_file(filename, f"{previous.rstrip()}\n- commit after {head}\n")
         self.git_no_hooks("add", filename)
 
     def conflicted_paths(self) -> list[str]:
@@ -765,6 +778,11 @@ def git_raw(cwd: Path, *args: str, check: bool = True) -> CommandResult:
 
 def ref_exists(cwd: Path, ref: str) -> bool:
     return git_raw(cwd, "show-ref", "--verify", "--quiet", ref, check=False).returncode == 0
+
+
+def branch_log_slug(branch: str) -> str:
+    return branch.replace("/", "__").replace("@", "_")
+
 
 def run_raw(cwd: Path, args: list[str], check: bool = True) -> CommandResult:
     env = os.environ.copy()

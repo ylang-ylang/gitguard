@@ -56,17 +56,21 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.expect_merge_rejected("case/dev-context/reject-to-dev", "PROTECTED_REF_NO_ALLOWED_SOURCE")
 
         self.git("checkout", "dev")
+        self.ensure_current_branch_log_staged()
         self.expect_rejected(
             ["commit", "--allow-empty", "-m", "direct dev commit"],
             "PROTECTED_REF_NO_ALLOWED_SOURCE",
         )
+        self.git_no_hooks("reset", "--hard", "HEAD")
         self.assert_protected_branch_guard_can_be_disabled()
 
         self.git("checkout", "main")
+        self.ensure_current_branch_log_staged()
         self.expect_rejected(
             ["commit", "--allow-empty", "-m", "direct main commit"],
             "PROTECTED_REF_NO_ALLOWED_SOURCE",
         )
+        self.git_no_hooks("reset", "--hard", "HEAD")
         self.expect_rejected(["tag", "V2.0", "dev"], "TAG_TARGET_NOT_TARGET_HEAD")
 
         self.expect_rejected(["tag", "v1.1", "main"], "TAG_TARGET_TAG_PATTERN_MISMATCH")
@@ -233,15 +237,20 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.create_branch(branch, "dev")
         self.write_file(".branch_logs/untracked.md", "untracked branch log\n")
         self.write_file("log-tracking.txt", "work\n")
-        self.git("add", ".branch_logs/untracked.md")
         self.git("add", "log-tracking.txt")
-        self.git("commit", "-m", "discard branch-local log")
+        result = self.git("commit", "-m", "missing staged branch log", check=False)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "BRANCH_LOG_UNTRACKED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected untracked branch log rejection\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
 
+        self.git("add", ".branch_logs/untracked.md")
+        self.git("commit", "-m", "track branch log")
         tracked_branch_logs = self.git("ls-tree", "-r", "--name-only", "HEAD", "--", ".branch_logs").stdout.splitlines()
-        if tracked_branch_logs != [".branch_logs/.gitkeep"]:
-            raise AssertionError(f"{self.name}: branch log commit should keep only .gitkeep: {tracked_branch_logs}")
-        if (self.repo / ".branch_logs" / "untracked.md").exists():
-            raise AssertionError(f"{self.name}: branch-local log file should be discarded from worktree")
+        if ".branch_logs/untracked.md" not in tracked_branch_logs:
+            raise AssertionError(f"{self.name}: branch log commit should include real branch log file: {tracked_branch_logs}")
 
         config_path = self.repo / ".git-guard" / "config.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -250,10 +259,16 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.git("rm", "-r", ".branch_logs")
         self.write_file("log-required.txt", "work\n")
         self.git("add", "log-required.txt")
-        self.git("commit", "-m", "recreate required branch log placeholder")
-        tracked_branch_logs = self.git("ls-tree", "-r", "--name-only", "HEAD", "--", ".branch_logs").stdout.splitlines()
-        if tracked_branch_logs != [".branch_logs/.gitkeep"]:
-            raise AssertionError(f"{self.name}: missing branch log directory should recreate .gitkeep: {tracked_branch_logs}")
+        result = self.git("commit", "-m", "missing required branch log", check=False)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "BRANCH_LOG_CHANGE_REQUIRED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected required branch log change rejection\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        self.write_file(".branch_logs/required.md", "required branch log\n")
+        self.git("add", ".branch_logs/required.md")
+        self.git("commit", "-m", "add required branch log")
 
         config.setdefault("branch_logs", {})["path"] = ".branch-log.md"
         config.setdefault("branch_logs", {})["force_required"] = True
@@ -265,7 +280,7 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.git("add", "log-required-file.txt")
         result = self.git("commit", "-m", "missing required branch log file", check=False)
         combined = result.stdout + result.stderr
-        if result.returncode == 0 or "BRANCH_LOG_REQUIRED" not in combined:
+        if result.returncode == 0 or "BRANCH_LOG_CHANGE_REQUIRED" not in combined:
             raise AssertionError(
                 f"{self.name}: expected required branch log file rejection\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -286,10 +301,11 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.write_file("log-drop-feature.txt", "feature\n")
         self.write_file(".branch_logs/log-drop.md", "branch-local log\n")
         self.git("add", "log-drop-feature.txt", ".branch_logs/log-drop.md")
-        self.git("commit", "-m", "feature with discarded branch log")
+        self.git("commit", "-m", "feature with branch log")
 
         self.git("checkout", "dev")
-        self.git("merge", "--no-ff", "--no-edit", branch)
+        self.git("merge", "--no-ff", "--no-edit", "--no-commit", branch)
+        self.git("commit", "-m", f"MR {branch} to dev without branch log")
         if (self.repo / ".branch_logs" / "log-drop.md").exists():
             raise AssertionError(f"{self.name}: source branch log leaked into dev")
 
@@ -343,6 +359,7 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
 
             self.write_file("direct-dev-emergency.txt", "emergency change\n")
             self.git("add", "direct-dev-emergency.txt")
+            self.ensure_current_branch_log_staged()
             result = self.git("commit", "-m", "emergency direct dev commit")
             combined = result.stdout + result.stderr
             if "PROTECTED_BRANCH_GUARD_DISABLED" not in combined:
