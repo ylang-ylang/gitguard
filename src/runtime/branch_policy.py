@@ -27,16 +27,18 @@ except ImportError:  # pragma: no cover - installed hook script mode
     from tag_policy import clear_satisfied_pending_tags, latest_reachable_release_tag, update_pending_tags, validate_tag
 
 def validate_prepared(repo: Path, policy: dict[str, Any], config: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
-    enforce_linked_worktree_branch_creation_guard(repo, config, updates)
-    enforce_submodule_main_guard(repo, config, updates)
-    validate_branch_rename_target(policy, updates)
+    meaningful_updates = [update for update in updates if update.old != update.new]
+
+    enforce_linked_worktree_branch_creation_guard(repo, config, meaningful_updates)
+    enforce_submodule_main_guard(repo, config, meaningful_updates)
+    validate_branch_rename_target(policy, meaningful_updates)
 
     state = load_state(state_path)
     pending = state.get("pending", {})
     pending_tags = state.get("pending_tags", {})
-    proposed = {update.ref: update.new for update in updates if update.new != ZERO}
+    proposed = {update.ref: update.new for update in meaningful_updates if update.new != ZERO}
 
-    for update in updates:
+    for update in meaningful_updates:
         if not is_policy_ref(update.ref):
             continue
 
@@ -340,12 +342,13 @@ def maximal_source_candidates(repo: Path, candidates: list[SourceCandidate]) -> 
     return maximal
 
 def update_committed_state(repo: Path, policy: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
+    meaningful_updates = [update for update in updates if update.old != update.new]
     state = load_state(state_path)
     pending = state.setdefault("pending", {})
     pending_tags = state.setdefault("pending_tags", {})
     branch_bases = state.setdefault("branch_bases", {})
 
-    for update in updates:
+    for update in meaningful_updates:
         if update.ref.startswith("refs/heads/") and update.old == ZERO and update.new != ZERO:
             edge = first_matching(policy.get("branch_from", []), "target_ref_regex", update.ref)
             if edge:
@@ -380,5 +383,5 @@ def update_committed_state(repo: Path, policy: dict[str, Any], state_path: Path,
                 "remaining_target_refs": [ref for ref in required if ref not in completed],
             }
 
-    clear_satisfied_pending_tags(pending_tags, updates)
+    clear_satisfied_pending_tags(pending_tags, meaningful_updates)
     save_state(state_path, state)

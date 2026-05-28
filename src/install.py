@@ -353,6 +353,7 @@ def hook_common_script() -> str:
             "",
             "git_guard_exec_runtime() {",
             '  [ -f "$GG_RUNTIME" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
+            "  export PYTHONDONTWRITEBYTECODE=1",
             '  exec python3 "$GG_RUNTIME" "$@"',
             "}",
             "",
