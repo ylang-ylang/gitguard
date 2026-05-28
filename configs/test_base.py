@@ -141,6 +141,8 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: common hook helper should include runtime auto-sync")
         if "GIT_GUARD_BIN" not in common_hook_text:
             raise AssertionError(f"{self.name}: common hook helper should support GIT_GUARD_BIN")
+        if "PYTHONDONTWRITEBYTECODE=1" not in common_hook_text:
+            raise AssertionError(f"{self.name}: common hook helper should prevent runtime bytecode caches")
         for hook_name in ["reference-transaction", "pre-push", "pre-commit", "pre-merge-commit"]:
             hook_text = (self.repo / ".git-guard" / "hooks" / hook_name).read_text(encoding="utf-8")
             if ". \"$hook_dir/common.sh\"" not in hook_text:
@@ -259,6 +261,9 @@ class PolicyHookTestBase:
         expected_support = (PROJECT_ROOT / "src" / "runtime" / "git_ops.py").read_text(encoding="utf-8")
         if support_path.read_text(encoding="utf-8") != expected_support:
             raise AssertionError(f"{self.name}: runtime auto-sync did not repair installed runtime support")
+        runtime_cache_path = self.repo / ".git-guard" / "runtime" / "__pycache__"
+        if runtime_cache_path.exists():
+            raise AssertionError(f"{self.name}: runtime hook should not create bytecode cache: {runtime_cache_path}")
 
     def assert_runtime_auto_sync_can_be_disabled(self) -> None:
         config_path = self.repo / ".git-guard" / "config.json"
@@ -420,6 +425,7 @@ class PolicyHookTestBase:
         linked_branch = "forbidden/from-linked-worktree"
 
         self.expect_rejected(["branch", main_branch, "HEAD"], "BRANCH_NAME_NOT_ALLOWED")
+        self.assert_existing_protected_branch_worktree_add_allowed()
 
         linked_repo = self.work_root.parent / f"{self.name}-linked-worktree"
         if linked_repo.exists():
@@ -492,6 +498,33 @@ class PolicyHookTestBase:
             )
         if ref_exists(linked_repo, f"refs/heads/{disabled_branch}"):
             raise AssertionError(f"{self.name}: config-disabled invalid branch was created: {disabled_branch}")
+
+    def assert_existing_protected_branch_worktree_add_allowed(self) -> None:
+        self.git("checkout", "main")
+        linked_repo = self.work_root.parent / f"{self.name}-existing-protected-branch-worktree"
+        if linked_repo.exists():
+            self.git_no_hooks("worktree", "remove", "--force", str(linked_repo), check=False)
+            shutil.rmtree(linked_repo, ignore_errors=True)
+        self.git_no_hooks("worktree", "prune", check=False)
+
+        before = self.ref_snapshot()
+        result = self.git("worktree", "add", str(linked_repo), "dev", check=False)
+        after = self.ref_snapshot()
+        if result.returncode != 0:
+            raise AssertionError(
+                f"{self.name}: existing protected branch worktree add should be allowed\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if after.refs != before.refs:
+            raise AssertionError(
+                f"{self.name}: existing protected branch worktree add changed refs\n"
+                f"before: {json.dumps(before.refs, indent=2, sort_keys=True)}\n"
+                f"after: {json.dumps(after.refs, indent=2, sort_keys=True)}"
+            )
+        branch = git_raw(linked_repo, "branch", "--show-current").stdout.strip()
+        if branch != "dev":
+            raise AssertionError(f"{self.name}: existing protected branch worktree should check out dev, got {branch!r}")
+        self.git_no_hooks("worktree", "remove", "--force", str(linked_repo))
 
     def assert_submodule_main_guard(self) -> None:
         target_branch = self.prepare_submodule_main_guard_branch()
