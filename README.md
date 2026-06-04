@@ -165,6 +165,8 @@ git-guard install --repo <repo> --config <repo>/.git-guard/contribution.md --sco
 
 This is a local content check, not a network update check. The repo is current when the files that the current local `git-guard install` would generate already match `.git-guard/`; otherwise install rewrites the changed managed files before the runtime hook runs. When runtime auto-sync rewrites anything, the hook prints a visible `git-guard: runtime auto-sync updated installed assets: ...` message naming the updated files. The repo does not store absolute paths to the Git Guard installation, so two machines with the same protected repo use the `git-guard` available on each machine. Existing installations need one manual reinstall before they have wrappers that can auto-sync themselves.
 
+When developing Git Guard itself, a source checkout may disable `runtime.auto_sync` so an older installed `git-guard` command does not rewrite the checked-in runtime with stale code. In that mode, keep `.git-guard/runtime/` updated explicitly with the matching `src/runtime/` changes.
+
 After a protected repository is cloned, users do not need to install this Python package just to enable the checked-in hook. They can run:
 
 ```bash
