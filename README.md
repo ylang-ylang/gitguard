@@ -165,6 +165,10 @@ git-guard install --repo <repo> --config <repo>/.git-guard/contribution.md --sco
 
 This is a local content check, not a network update check. The repo is current when the files that the current local `git-guard install` would generate already match `.git-guard/`; otherwise install rewrites the changed managed files before the runtime hook runs. When runtime auto-sync rewrites anything, the hook prints a visible `git-guard: runtime auto-sync updated installed assets: ...` message naming the updated files. The repo does not store absolute paths to the Git Guard installation, so two machines with the same protected repo use the `git-guard` available on each machine. Existing installations need one manual reinstall before they have wrappers that can auto-sync themselves.
 
+Runtime auto-sync is skipped when the current worktree is on a policy protected branch such as `main` or `dev`. Protected branch hooks should validate only and must not create worktree changes before an integration merge. Run explicit `git-guard install` on a short-lived branch when checked-in hook/runtime assets need to change, then merge those assets through the normal branch flow.
+
+When `.git-guard/` is tracked by the repository, the installed pre-commit hook requires dirty `.git-guard/` files to be staged. This prevents runtime auto-sync updates on short-lived branches from remaining local-only changes that agents accidentally omit from the commit.
+
 When developing Git Guard itself, a source checkout may disable `runtime.auto_sync` so an older installed `git-guard` command does not rewrite the checked-in runtime with stale code. In that mode, keep `.git-guard/runtime/` updated explicitly with the matching `src/runtime/` changes.
 
 After a protected repository is cloned, users do not need to install this Python package just to enable the checked-in hook. They can run:
@@ -204,7 +208,8 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
     "enabled": true
   },
   "runtime": {
-    "auto_sync": true
+    "auto_sync": true,
+    "require_managed_files_staged": true
   },
   "submodules": {
     "allowed_branches": [
@@ -224,6 +229,8 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
 If `branch_logs.force_required` is `true`, ordinary commits on policy-managed branches must include a staged branch-log change. For the default directory path, `.branch_logs/.gitkeep` is only a placeholder and does not satisfy the requirement; the staged change must touch another file under `.branch_logs/`. For a file-style `branch_logs.path`, the configured file itself must be staged in the commit. This is the default. If `force_required` is `false`, the path is optional.
 
 The installed `pre-commit` hook rejects untracked or unstaged branch-log files for ordinary commits. This keeps required branch logs from becoming local-only notes that are not actually recorded in the branch history.
+
+If `.git-guard/` is tracked and `runtime.require_managed_files_staged` is enabled, the installed `pre-commit` hook rejects untracked or unstaged `.git-guard/` files with `GIT_GUARD_MANAGED_FILES_NOT_STAGED`. Stage generated hook/runtime updates, or restore them explicitly, before committing.
 
 `protected_branches.enabled` controls merge-source enforcement for protected branches such as `dev` and `main`. The default `true` requires protected branches to move only through policy-declared sources. Setting it to `false` is an emergency escape hatch for direct fast-forward commits on protected branches; deletes and non-fast-forward updates are still rejected.
 
