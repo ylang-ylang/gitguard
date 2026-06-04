@@ -104,6 +104,8 @@ The policy integration tests cover:
 - disabling pre-push missing tag auto-sync through `.git-guard/config.json`;
 - accepting other allowed merge rules while a tagged merge is waiting for its tag;
 - accepting source branches that continue committing after absorbing the current protected target head;
+- rejecting commits that leave tracked `.git-guard/` hook/runtime changes unstaged;
+- skipping runtime auto-sync while the current worktree is on a protected branch;
 - accepting the normal configured branch families, required merge targets, and tag rules before the separator.
 
 Not yet covered by the generated Mermaid policy alone:
