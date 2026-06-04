@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,7 @@ INSTALLED_RUNTIME_ENTRYPOINT = "policy_reference_transaction_hook.py"
 DEFAULT_CONFIG = {
     "branch_logs": {
         "path": ".branch_logs/",
-        "force_required": True,
+        "force_diff_required": True,
     },
     "pre_push": {
         "auto_push_missing_tags": True,
@@ -154,12 +155,12 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
     )
     record_change(changes, ".git-guard/config.json", ensure_config_defaults(config_path))
     config = load_config(config_path)
-    placeholder_path = branch_log_placeholder_path(repo, config) if os.environ.get("GG_RUNTIME_SYNC_ACTIVE") != "1" else None
-    if placeholder_path:
+    initial_branch_log_path = branch_log_initial_path(repo, policy, config) if os.environ.get("GG_RUNTIME_SYNC_ACTIVE") != "1" else None
+    if initial_branch_log_path:
         record_change(
             changes,
-            placeholder_path.relative_to(repo).as_posix(),
-            ensure_branch_log_placeholder(repo, placeholder_path, config),
+            initial_branch_log_path.relative_to(repo).as_posix(),
+            ensure_branch_log_template(repo, initial_branch_log_path),
         )
 
     hook_path = hook_dir / "reference-transaction"
@@ -250,6 +251,7 @@ def ensure_config_defaults(path: Path) -> bool:
         raise InstallError(f"config must be a JSON object: {path}")
 
     merged = merge_defaults(config, DEFAULT_CONFIG)
+    normalize_config(merged)
     if merged != config:
         return write_text_if_different(path, json.dumps(merged, indent=2, sort_keys=True) + "\n")
     return False
@@ -279,11 +281,17 @@ def merge_defaults(config: dict[str, Any], defaults: dict[str, Any]) -> dict[str
     return merged
 
 
-def branch_log_placeholder_path(repo: Path, config: dict[str, Any]) -> Path | None:
+def normalize_config(config: dict[str, Any]) -> None:
+    branch_logs = config.get("branch_logs")
+    if isinstance(branch_logs, dict):
+        branch_logs.pop("force_required", None)
+
+
+def branch_log_initial_path(repo: Path, policy: dict[str, Any], config: dict[str, Any]) -> Path | None:
     section = config.get("branch_logs", {})
     if not isinstance(section, dict):
         return None
-    if section.get("force_required", DEFAULT_CONFIG["branch_logs"]["force_required"]) is not True:
+    if section.get("force_diff_required", DEFAULT_CONFIG["branch_logs"]["force_diff_required"]) is not True:
         return None
 
     raw_path = section.get("path", DEFAULT_CONFIG["branch_logs"]["path"])
@@ -297,7 +305,24 @@ def branch_log_placeholder_path(repo: Path, config: dict[str, Any]) -> Path | No
     if not valid_repo_relative_path(path):
         return None
 
-    return repo / path / ".gitkeep"
+    branch = current_branch(repo)
+    if not branch:
+        return None
+    filename = f"{branch_log_slug(branch)}.md"
+    if branch in policy.get("branches", {}).get("long_lived", []):
+        return repo / path / filename
+    return repo / path / "branches" / filename
+
+
+def current_branch(repo: Path) -> str | None:
+    result = git(repo, "branch", "--show-current", check=False)
+    branch = result.stdout.strip()
+    return branch or None
+
+
+def branch_log_slug(branch: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-")
+    return slug or "branch"
 
 
 def valid_repo_relative_path(path: str) -> bool:
@@ -310,11 +335,22 @@ def valid_repo_relative_path(path: str) -> bool:
     return True
 
 
-def ensure_branch_log_placeholder(repo: Path, placeholder_path: Path, config: dict[str, Any]) -> bool:
-    placeholder = placeholder_path.relative_to(repo).as_posix()
-    if git_literal_pathspec(repo, "ls-files", "--cached", "--", placeholder).stdout.splitlines():
+def ensure_branch_log_template(repo: Path, branch_log_path: Path) -> bool:
+    branch_log = branch_log_path.relative_to(repo).as_posix()
+    if git_literal_pathspec(repo, "ls-files", "--cached", "--", branch_log).stdout.splitlines():
         return False
-    return write_text_if_different(placeholder_path, "")
+    branch = current_branch(repo)
+    if not branch:
+        return False
+    text = "\n".join(
+        [
+            f"# {branch}",
+            "",
+            f"<!-- git-guard: ref=refs/heads/{branch} -->",
+            "",
+        ]
+    )
+    return write_text_if_different(branch_log_path, text)
 
 
 def reference_transaction_hook() -> str:
