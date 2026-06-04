@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .branch_logs import enforce_branch_log_target_invariant
+    from .branch_logs import enforce_branch_log_update
     from .common import HookReject, RefUpdate, SourceCandidate, ZERO, warn
     from .config import config_bool
     from .git_ops import first_matching, git, has_non_first_parent, is_ancestor, is_first_parent_ancestor, is_policy_ref, ref_contains, ref_exists, refs_matching, rev_parse, short_sha
@@ -17,7 +17,7 @@ try:
     from .submodule_policy import enforce_submodule_main_guard
     from .tag_policy import clear_satisfied_pending_tags, latest_reachable_release_tag, update_pending_tags, validate_tag
 except ImportError:  # pragma: no cover - installed hook script mode
-    from branch_logs import enforce_branch_log_target_invariant
+    from branch_logs import enforce_branch_log_update
     from common import HookReject, RefUpdate, SourceCandidate, ZERO, warn
     from config import config_bool
     from git_ops import first_matching, git, has_non_first_parent, is_ancestor, is_first_parent_ancestor, is_policy_ref, ref_contains, ref_exists, refs_matching, rev_parse, short_sha
@@ -27,21 +27,24 @@ except ImportError:  # pragma: no cover - installed hook script mode
     from tag_policy import clear_satisfied_pending_tags, latest_reachable_release_tag, update_pending_tags, validate_tag
 
 def validate_prepared(repo: Path, policy: dict[str, Any], config: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
-    enforce_linked_worktree_branch_creation_guard(repo, config, updates)
-    enforce_submodule_main_guard(repo, config, updates)
-    validate_branch_rename_target(policy, updates)
+    meaningful_updates = [update for update in updates if update.old != update.new]
+
+    enforce_linked_worktree_branch_creation_guard(repo, config, meaningful_updates)
+    enforce_submodule_main_guard(repo, config, meaningful_updates)
+    validate_branch_rename_target(policy, meaningful_updates)
 
     state = load_state(state_path)
     pending = state.get("pending", {})
     pending_tags = state.get("pending_tags", {})
-    proposed = {update.ref: update.new for update in updates if update.new != ZERO}
+    proposed = {update.ref: update.new for update in meaningful_updates if update.new != ZERO}
 
-    for update in updates:
+    for update in meaningful_updates:
         if not is_policy_ref(update.ref):
             continue
 
         if update.ref.startswith("refs/heads/"):
             validate_branch_name(policy, update.ref)
+            enforce_branch_log_update(repo, policy, config, update)
 
         enforce_pending_lock(repo, pending, update)
         enforce_pending_tag_lock(repo, policy, pending_tags, update)
@@ -211,7 +214,6 @@ def validate_managed_branch_update(
     for source_ref in introduced_policy_branch_heads(repo, policy, update):
         rule = merge_rule_for_source(policy, source_ref, update.ref)
         if rule:
-            enforce_branch_log_target_invariant(repo, config, update)
             continue
         raise HookReject(
             "MANAGED_BRANCH_SOURCE_NOT_ALLOWED",
@@ -278,7 +280,6 @@ def validate_protected_target_update(
 
     candidate = candidates[0]
     enforce_sync_merge_required(repo, candidate, update)
-    enforce_branch_log_target_invariant(repo, config, update)
 
     required = required_target_refs(policy, candidate.rule["source"])
     if len(required) <= 1:
@@ -340,12 +341,13 @@ def maximal_source_candidates(repo: Path, candidates: list[SourceCandidate]) -> 
     return maximal
 
 def update_committed_state(repo: Path, policy: dict[str, Any], state_path: Path, updates: list[RefUpdate]) -> None:
+    meaningful_updates = [update for update in updates if update.old != update.new]
     state = load_state(state_path)
     pending = state.setdefault("pending", {})
     pending_tags = state.setdefault("pending_tags", {})
     branch_bases = state.setdefault("branch_bases", {})
 
-    for update in updates:
+    for update in meaningful_updates:
         if update.ref.startswith("refs/heads/") and update.old == ZERO and update.new != ZERO:
             edge = first_matching(policy.get("branch_from", []), "target_ref_regex", update.ref)
             if edge:
@@ -380,5 +382,5 @@ def update_committed_state(repo: Path, policy: dict[str, Any], state_path: Path,
                 "remaining_target_refs": [ref for ref in required if ref not in completed],
             }
 
-    clear_satisfied_pending_tags(pending_tags, updates)
+    clear_satisfied_pending_tags(pending_tags, meaningful_updates)
     save_state(state_path, state)

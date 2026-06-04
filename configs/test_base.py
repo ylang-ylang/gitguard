@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -122,8 +123,10 @@ class PolicyHookTestBase:
         config = json.loads((self.repo / ".git-guard" / "config.json").read_text(encoding="utf-8"))
         if config.get("branch_logs", {}).get("path") != ".branch_logs/":
             raise AssertionError(f"{self.name}: config should set default branch log path")
-        if config.get("branch_logs", {}).get("force_required") is not True:
-            raise AssertionError(f"{self.name}: config should force branch logs by default")
+        if config.get("branch_logs", {}).get("force_diff_required") is not True:
+            raise AssertionError(f"{self.name}: config should force branch log diffs by default")
+        if "force_required" in config.get("branch_logs", {}):
+            raise AssertionError(f"{self.name}: config should not keep deprecated branch_logs.force_required")
         if config.get("worktree", {}).get("reject_branch_creation_in_linked_worktree") is not True:
             raise AssertionError(f"{self.name}: config should enable linked worktree branch creation guard by default")
         if config.get("pre_push", {}).get("auto_push_missing_tags") is not True:
@@ -141,11 +144,13 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: common hook helper should include runtime auto-sync")
         if "GIT_GUARD_BIN" not in common_hook_text:
             raise AssertionError(f"{self.name}: common hook helper should support GIT_GUARD_BIN")
+        if "PYTHONDONTWRITEBYTECODE=1" not in common_hook_text:
+            raise AssertionError(f"{self.name}: common hook helper should prevent runtime bytecode caches")
         for hook_name in ["reference-transaction", "pre-push", "pre-commit", "pre-merge-commit"]:
             hook_text = (self.repo / ".git-guard" / "hooks" / hook_name).read_text(encoding="utf-8")
             if ". \"$hook_dir/common.sh\"" not in hook_text:
                 raise AssertionError(f"{self.name}: {hook_name} hook should source common hook helper")
-        self.assert_install_creates_required_branch_log_placeholder()
+        self.assert_install_creates_required_branch_log_template()
         self.assert_install_is_idempotent_and_preserves_config()
         self.assert_local_install_clears_worktree_hooks_path_override()
         self.assert_runtime_auto_sync_repairs_installed_runtime()
@@ -162,7 +167,7 @@ class PolicyHookTestBase:
         if worktree_hook_path.returncode == 0:
             raise AssertionError(f"{self.name}: enable.sh should not set worktree hooksPath: {worktree_hook_path.stdout.strip()}")
 
-    def assert_install_creates_required_branch_log_placeholder(self) -> None:
+    def assert_install_creates_required_branch_log_template(self) -> None:
         placeholder_repo = self.work_root.parent / f"{self.name}-install-placeholder"
         if placeholder_repo.exists() and not self.keep:
             shutil.rmtree(placeholder_repo)
@@ -175,9 +180,11 @@ class PolicyHookTestBase:
         git_raw(placeholder_repo, "commit", "-m", "start")
 
         install_policy_hook(placeholder_repo, self.config_dir, scope="worktree")
-        placeholder = placeholder_repo / ".branch_logs" / ".gitkeep"
-        if not placeholder.exists():
-            raise AssertionError(f"{self.name}: install should create required branch log placeholder: {placeholder}")
+        branch_log = placeholder_repo / ".branch_logs" / "main.md"
+        if not branch_log.exists():
+            raise AssertionError(f"{self.name}: install should create current branch log template: {branch_log}")
+        if "refs/heads/main" not in branch_log.read_text(encoding="utf-8"):
+            raise AssertionError(f"{self.name}: install branch log template should record its owner ref")
 
     def assert_local_install_clears_worktree_hooks_path_override(self) -> None:
         self.git_no_hooks("config", "--worktree", "core.hooksPath", ".git-flow-guard/hooks")
@@ -209,8 +216,10 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: reinstall should preserve runtime.auto_sync=false")
         if updated.get("branch_logs", {}).get("path") != ".branch_logs/":
             raise AssertionError(f"{self.name}: reinstall should preserve/add branch_logs.path")
-        if updated.get("branch_logs", {}).get("force_required") is not True:
-            raise AssertionError(f"{self.name}: reinstall should preserve/add branch_logs.force_required=true")
+        if updated.get("branch_logs", {}).get("force_diff_required") is not True:
+            raise AssertionError(f"{self.name}: reinstall should preserve/add branch_logs.force_diff_required=true")
+        if "force_required" in updated.get("branch_logs", {}):
+            raise AssertionError(f"{self.name}: reinstall should remove deprecated branch_logs.force_required")
         if updated.get("pre_push", {}).get("auto_push_missing_tags") is not True:
             raise AssertionError(f"{self.name}: reinstall should preserve/add pre_push defaults")
         if updated.get("protected_branches", {}).get("enabled") is not True:
@@ -259,6 +268,9 @@ class PolicyHookTestBase:
         expected_support = (PROJECT_ROOT / "src" / "runtime" / "git_ops.py").read_text(encoding="utf-8")
         if support_path.read_text(encoding="utf-8") != expected_support:
             raise AssertionError(f"{self.name}: runtime auto-sync did not repair installed runtime support")
+        runtime_cache_path = self.repo / ".git-guard" / "runtime" / "__pycache__"
+        if runtime_cache_path.exists():
+            raise AssertionError(f"{self.name}: runtime hook should not create bytecode cache: {runtime_cache_path}")
 
     def assert_runtime_auto_sync_can_be_disabled(self) -> None:
         config_path = self.repo / ".git-guard" / "config.json"
@@ -352,7 +364,7 @@ class PolicyHookTestBase:
                     f"non-branch-log conflicts: {non_branch_log_conflicts}\n"
                     f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
                 )
-        self.restore_target_branch_log_tree(target_old)
+        self.ensure_current_branch_log_staged()
         remaining_conflicts = self.conflicted_paths()
         if remaining_conflicts:
             raise AssertionError(f"{self.name}: unresolved merge conflicts before expected rejection: {remaining_conflicts}")
@@ -420,6 +432,7 @@ class PolicyHookTestBase:
         linked_branch = "forbidden/from-linked-worktree"
 
         self.expect_rejected(["branch", main_branch, "HEAD"], "BRANCH_NAME_NOT_ALLOWED")
+        self.assert_existing_protected_branch_worktree_add_allowed()
 
         linked_repo = self.work_root.parent / f"{self.name}-linked-worktree"
         if linked_repo.exists():
@@ -492,6 +505,33 @@ class PolicyHookTestBase:
             )
         if ref_exists(linked_repo, f"refs/heads/{disabled_branch}"):
             raise AssertionError(f"{self.name}: config-disabled invalid branch was created: {disabled_branch}")
+
+    def assert_existing_protected_branch_worktree_add_allowed(self) -> None:
+        self.git("checkout", "main")
+        linked_repo = self.work_root.parent / f"{self.name}-existing-protected-branch-worktree"
+        if linked_repo.exists():
+            self.git_no_hooks("worktree", "remove", "--force", str(linked_repo), check=False)
+            shutil.rmtree(linked_repo, ignore_errors=True)
+        self.git_no_hooks("worktree", "prune", check=False)
+
+        before = self.ref_snapshot()
+        result = self.git("worktree", "add", str(linked_repo), "dev", check=False)
+        after = self.ref_snapshot()
+        if result.returncode != 0:
+            raise AssertionError(
+                f"{self.name}: existing protected branch worktree add should be allowed\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if after.refs != before.refs:
+            raise AssertionError(
+                f"{self.name}: existing protected branch worktree add changed refs\n"
+                f"before: {json.dumps(before.refs, indent=2, sort_keys=True)}\n"
+                f"after: {json.dumps(after.refs, indent=2, sort_keys=True)}"
+            )
+        branch = git_raw(linked_repo, "branch", "--show-current").stdout.strip()
+        if branch != "dev":
+            raise AssertionError(f"{self.name}: existing protected branch worktree should check out dev, got {branch!r}")
+        self.git_no_hooks("worktree", "remove", "--force", str(linked_repo))
 
     def assert_submodule_main_guard(self) -> None:
         target_branch = self.prepare_submodule_main_guard_branch()
@@ -704,27 +744,33 @@ class PolicyHookTestBase:
         branch = self.git_no_hooks("branch", "--show-current").stdout.strip()
         if not branch:
             return
-        filename = f".branch_logs/{branch_log_slug(branch)}.md"
+        filename = self.branch_log_path_for_branch(branch)
         path = self.repo / filename
-        previous = path.read_text(encoding="utf-8") if path.exists() else f"# {branch}\n"
+        previous = path.read_text(encoding="utf-8") if path.exists() else self.branch_log_template(branch)
         head = self.git_no_hooks("rev-parse", "--short", "HEAD").stdout.strip()
         self.write_file(filename, f"{previous.rstrip()}\n- commit after {head}\n")
         self.git_no_hooks("add", filename)
 
+    def branch_log_path_for_branch(self, branch: str) -> str:
+        root = ".branch_logs"
+        filename = f"{branch_log_slug(branch)}.md"
+        if branch in self.policy.get("branches", {}).get("long_lived", []):
+            return f"{root}/{filename}"
+        return f"{root}/branches/{filename}"
+
+    def branch_log_template(self, branch: str) -> str:
+        return "\n".join(
+            [
+                f"# {branch}",
+                "",
+                f"<!-- git-guard: ref=refs/heads/{branch} -->",
+                "",
+            ]
+        )
+
     def conflicted_paths(self) -> list[str]:
         output = self.git_no_hooks("diff", "--name-only", "--diff-filter=U").stdout
         return [line for line in output.splitlines() if line]
-
-    def restore_target_branch_log_tree(self, target_old: str = "HEAD") -> None:
-        path = ".branch_logs"
-        self.git_no_hooks("rm", "-r", "--cached", "--ignore-unmatch", path)
-        branch_log_path = self.repo / path
-        if branch_log_path.is_dir():
-            shutil.rmtree(branch_log_path)
-        elif branch_log_path.exists():
-            branch_log_path.unlink()
-        self.write_file(".branch_logs/.gitkeep", "")
-        self.git_no_hooks("add", ".branch_logs/.gitkeep")
 
     def create_branch(self, branch: str, source: str) -> None:
         self.git("checkout", source)
@@ -741,7 +787,6 @@ class PolicyHookTestBase:
 
     def merge_to(self, source: str, target: str, message: str | None = None) -> None:
         self.git("checkout", target)
-        target_old = self.rev_parse("HEAD")
         result = self.git("merge", "--no-ff", "--no-edit", "--no-commit", "-X", "ours", source, check=False)
         if result.returncode != 0:
             conflicts = self.conflicted_paths()
@@ -752,7 +797,7 @@ class PolicyHookTestBase:
                     f"non-branch-log conflicts: {non_branch_log_conflicts}\n"
                     f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
                 )
-        self.restore_target_branch_log_tree(target_old)
+        self.ensure_current_branch_log_staged()
         remaining_conflicts = self.conflicted_paths()
         if remaining_conflicts:
             raise AssertionError(f"{self.name}: unresolved merge conflicts after branch log restore: {remaining_conflicts}")
@@ -795,7 +840,8 @@ def ref_exists(cwd: Path, ref: str) -> bool:
 
 
 def branch_log_slug(branch: str) -> str:
-    return branch.replace("/", "__").replace("@", "_")
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-")
+    return slug or "branch"
 
 
 def run_raw(cwd: Path, args: list[str], check: bool = True) -> CommandResult:
