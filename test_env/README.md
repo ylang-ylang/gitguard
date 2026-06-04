@@ -103,6 +103,7 @@ The policy integration tests cover:
 - disabling linked worktree branch creation rejection through `.git-guard/config.json`;
 - disabling pre-push missing tag auto-sync through `.git-guard/config.json`;
 - accepting other allowed merge rules while a tagged merge is waiting for its tag;
+- accepting source branches that continue committing after absorbing the current protected target head;
 - accepting the normal configured branch families, required merge targets, and tag rules before the separator.
 
 Not yet covered by the generated Mermaid policy alone:

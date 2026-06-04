@@ -27,6 +27,7 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
 
     def create_correct_git_dag_tree(self) -> None:
         self.create_infra_flow()
+        self.create_infra_post_sync_commit_flow()
         self.create_feature_flow()
         self.create_release_flow()
         self.create_hotfix_flow()
@@ -39,7 +40,6 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.create_old_release_fixture()
         self.create_stale_infra_fixture()
         self.create_stale_feat_fixture()
-        self.create_infra_commit_after_sync_fixture()
 
     def mark_rejection_tests_start(self) -> None:
         branch = "feat/rejection-boundary"
@@ -81,9 +81,6 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.git("checkout", "dev")
         self.expect_merge_rejected("feat/stale", "SYNC_MERGE_REQUIRED")
 
-        self.git("checkout", "dev")
-        self.expect_merge_rejected("infra/commit-after-sync", "SYNC_MERGE_REQUIRED")
-
         self.expect_rejected(["tag", "release-1.0.0", "main"], "TAG_TARGET_TAG_PATTERN_MISMATCH")
         self.expect_rejected(
             ["tag", "v1.1.2", self.release_main_sha],
@@ -117,6 +114,31 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.assert_is_ancestor(infra_sha, "dev")
         self.assert_is_ancestor(dev_sha, branch)
         self.assert_is_ancestor(validation_sha, "dev")
+
+    def create_infra_post_sync_commit_flow(self) -> None:
+        branch = "infra/post-sync-commit"
+        self.create_branch(branch, "dev")
+        infra_sha = self.commit_file(
+            branch,
+            "infra-after-sync.txt",
+            "infra after sync\n",
+            "fixture infra after sync",
+        )
+        dev_advance_branch = "infra/before-post-sync-commit"
+        self.create_branch(dev_advance_branch, "dev")
+        dev_sha = self.commit_file(
+            dev_advance_branch,
+            "dev-before-post-sync-commit.txt",
+            "dev before post-sync commit\n",
+            "advance dev before post-sync commit",
+        )
+        self.merge_to(dev_advance_branch, "dev")
+        self.merge_to("dev", branch)
+        post_sync_sha = self.commit_file(branch, "post-sync.txt", "post sync\n", "commit after sync")
+        self.merge_to(branch, "dev")
+        self.assert_is_ancestor(infra_sha, "dev")
+        self.assert_is_ancestor(dev_sha, branch)
+        self.assert_is_ancestor(post_sync_sha, "dev")
 
     def create_feature_flow(self) -> None:
         case_branch = "case/main-context/export"
@@ -216,22 +238,6 @@ class InfraFeatReleaseHookTest(PolicyHookTestBase):
         self.create_branch(dev_advance_branch, "dev")
         self.commit_file(dev_advance_branch, "dev-after-stale-feature.txt", "dev after stale feature\n", "advance dev after stale feature")
         self.merge_to(dev_advance_branch, "dev")
-
-    def create_infra_commit_after_sync_fixture(self) -> None:
-        branch = "infra/commit-after-sync"
-        self.create_branch(branch, "dev")
-        self.commit_file(branch, "infra-after-sync.txt", "infra after sync\n", "fixture infra after sync")
-        dev_advance_branch = "infra/before-sync-commit"
-        self.create_branch(dev_advance_branch, "dev")
-        self.commit_file(
-            dev_advance_branch,
-            "dev-before-sync-commit.txt",
-            "dev before sync commit\n",
-            "advance dev before sync commit",
-        )
-        self.merge_to(dev_advance_branch, "dev")
-        self.merge_to("dev", branch)
-        self.commit_file(branch, "post-sync.txt", "post sync\n", "commit after sync")
 
     def assert_hotfix_wrong_line_rejected(self) -> None:
         branch = "hotfix/wrong-line-reject"
