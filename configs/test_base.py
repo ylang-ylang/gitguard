@@ -135,6 +135,8 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: config should enable protected branch guards by default")
         if config.get("runtime", {}).get("auto_sync") is not True:
             raise AssertionError(f"{self.name}: config should enable runtime auto-sync by default")
+        if config.get("runtime", {}).get("require_managed_files_staged") is not True:
+            raise AssertionError(f"{self.name}: config should require staged managed git-guard files by default")
         if config.get("submodules", {}).get("allowed_branches") != ["main", "case/*/*"]:
             raise AssertionError(f"{self.name}: config should default submodule allowed branches to main and case/*/*")
         if config.get("submodules", {}).get("main_guard") is not True:
@@ -150,10 +152,19 @@ class PolicyHookTestBase:
             hook_text = (self.repo / ".git-guard" / "hooks" / hook_name).read_text(encoding="utf-8")
             if ". \"$hook_dir/common.sh\"" not in hook_text:
                 raise AssertionError(f"{self.name}: {hook_name} hook should source common hook helper")
+            if hook_name == "pre-commit":
+                if "git_guard_runtime_sync" not in hook_text:
+                    raise AssertionError(f"{self.name}: pre-commit hook should run runtime auto-sync")
+            elif "git_guard_runtime_sync" in hook_text:
+                raise AssertionError(f"{self.name}: {hook_name} hook should not write worktree through runtime auto-sync")
         self.assert_install_creates_required_branch_log_template()
         self.assert_install_is_idempotent_and_preserves_config()
         self.assert_local_install_clears_worktree_hooks_path_override()
-        self.assert_runtime_auto_sync_repairs_installed_runtime()
+        self.assert_git_guard_managed_files_must_be_staged()
+        self.assert_runtime_auto_sync_skips_protected_pre_commit()
+        self.assert_reference_transaction_does_not_auto_sync()
+        self.assert_pre_push_does_not_auto_sync()
+        self.assert_runtime_auto_sync_repairs_installed_runtime_on_pre_commit()
         self.assert_runtime_auto_sync_can_be_disabled()
         self.git_no_hooks("config", "--worktree", "core.hooksPath", ".git-flow-guard/hooks")
         self.git_no_hooks("config", "--local", "--unset", "core.hooksPath", check=False)
@@ -214,6 +225,8 @@ class PolicyHookTestBase:
         updated = json.loads(config_path.read_text(encoding="utf-8"))
         if updated.get("runtime", {}).get("auto_sync") is not False:
             raise AssertionError(f"{self.name}: reinstall should preserve runtime.auto_sync=false")
+        if updated.get("runtime", {}).get("require_managed_files_staged") is not True:
+            raise AssertionError(f"{self.name}: reinstall should preserve/add runtime.require_managed_files_staged=true")
         if updated.get("branch_logs", {}).get("path") != ".branch_logs/":
             raise AssertionError(f"{self.name}: reinstall should preserve/add branch_logs.path")
         if updated.get("branch_logs", {}).get("force_diff_required") is not True:
@@ -234,23 +247,157 @@ class PolicyHookTestBase:
         config.setdefault("runtime", {})["auto_sync"] = True
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    def assert_runtime_auto_sync_repairs_installed_runtime(self) -> None:
+    def assert_git_guard_managed_files_must_be_staged(self) -> None:
+        self.git("checkout", "main")
+        branch_log = self.branch_log_path_for_branch("main")
+        self.write_file("README.md", "managed files staged check\n")
+        self.git("add", "README.md")
+        self.ensure_current_branch_log_staged()
+        self.git_no_hooks("add", ".git-guard")
+
+        support_path = self.repo / ".git-guard" / "runtime" / "git_ops.py"
+        support_path.write_text(
+            support_path.read_text(encoding="utf-8") + "\n# unstaged managed file sentinel\n",
+            encoding="utf-8",
+        )
+
+        result = self.git("commit", "-m", "managed files without staged hook", check=False)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "GIT_GUARD_MANAGED_FILES_NOT_STAGED" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected unstaged .git-guard managed file to reject commit\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if ".git-guard/runtime/git_ops.py" not in combined:
+            raise AssertionError(
+                f"{self.name}: managed file rejection should name dirty runtime support\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        self.git_no_hooks("restore", ".git-guard/runtime/git_ops.py")
+        self.git_no_hooks("restore", "--staged", ".git-guard", "README.md", branch_log)
+        self.git_no_hooks("restore", "README.md", branch_log)
+        install_policy_hook(self.repo, self.repo / ".git-guard" / "contribution.md", scope="worktree")
+
+    def assert_runtime_auto_sync_skips_protected_pre_commit(self) -> None:
+        self.git("checkout", "main")
+        branch_log = self.branch_log_path_for_branch("main")
+        hook_path = self.repo / ".git-guard" / "hooks" / "pre-push"
+        stale_hook = "#!/usr/bin/env bash\n# stale pre-push sentinel\n"
+        hook_path.write_text(stale_hook, encoding="utf-8")
+        hook_path.chmod(0o755)
+        self.write_file("README.md", "protected branch auto-sync check\n")
+        self.git("add", "README.md")
+        self.ensure_current_branch_log_staged()
+
+        result = self.git("commit", "-m", "protected branch auto-sync check", check=False)
+        combined = result.stdout + result.stderr
+        if "runtime auto-sync updated installed assets" in combined:
+            raise AssertionError(
+                f"{self.name}: protected branch pre-commit should skip runtime auto-sync\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if "PROTECTED_REF_NO_ALLOWED_SOURCE" not in combined:
+            raise AssertionError(
+                f"{self.name}: protected branch skip should still run existing runtime policy\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if hook_path.read_text(encoding="utf-8") != stale_hook:
+            raise AssertionError(f"{self.name}: protected branch pre-commit auto-sync should not rewrite managed hook")
+        self.git_no_hooks("restore", "--staged", "README.md", branch_log)
+        self.git_no_hooks("restore", "README.md", branch_log)
+        install_policy_hook(self.repo, self.repo / ".git-guard" / "contribution.md", scope="worktree")
+
+    def assert_reference_transaction_does_not_auto_sync(self) -> None:
+        branch = self.runtime_auto_sync_feature_branch("runtime-auto-sync-ref")
+        if branch is None:
+            return
+        original_branch = self.git_no_hooks("branch", "--show-current").stdout.strip()
+        self.create_branch(branch, "dev")
+
+        hook_path = self.repo / ".git-guard" / "hooks" / "pre-push"
+        stale_hook = "#!/usr/bin/env bash\n# stale pre-push sentinel\n"
+        hook_path.write_text(stale_hook, encoding="utf-8")
+        hook_path.chmod(0o755)
+
+        result = self.git("branch", "forbidden/runtime-auto-sync-ref", "HEAD", check=False)
+        combined = result.stdout + result.stderr
+        if "runtime auto-sync updated installed assets" in combined:
+            raise AssertionError(
+                f"{self.name}: reference-transaction hook should not run runtime auto-sync\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if "BRANCH_NAME_NOT_ALLOWED" not in combined:
+            raise AssertionError(
+                f"{self.name}: reference-transaction hook should still run existing runtime policy\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if hook_path.read_text(encoding="utf-8") != stale_hook:
+            raise AssertionError(f"{self.name}: reference-transaction hook should not rewrite managed hook")
+        install_policy_hook(self.repo, self.repo / ".git-guard" / "contribution.md", scope="worktree")
+        if original_branch:
+            self.git_no_hooks("checkout", original_branch)
+        self.git_no_hooks("branch", "-D", branch)
+        branch_log = self.repo / self.branch_log_path_for_branch(branch)
+        if branch_log.exists():
+            branch_log.unlink()
+
+    def assert_pre_push_does_not_auto_sync(self) -> None:
+        branch = self.runtime_auto_sync_feature_branch("runtime-auto-sync-pre-push")
+        if branch is None:
+            return
+        original_branch = self.git_no_hooks("branch", "--show-current").stdout.strip()
+        self.create_branch(branch, "dev")
+
+        hook_path = self.repo / ".git-guard" / "hooks" / "pre-commit"
+        stale_hook = "#!/usr/bin/env bash\n# stale pre-commit sentinel\n"
+        hook_path.write_text(stale_hook, encoding="utf-8")
+        hook_path.chmod(0o755)
+
+        result = self.run_command([".git-guard/hooks/pre-push", "origin", "dummy"], check=False)
+        combined = result.stdout + result.stderr
+        if "runtime auto-sync updated installed assets" in combined:
+            raise AssertionError(
+                f"{self.name}: pre-push hook should not run runtime auto-sync\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        if hook_path.read_text(encoding="utf-8") != stale_hook:
+            raise AssertionError(f"{self.name}: pre-push hook should not rewrite managed hook")
+        install_policy_hook(self.repo, self.repo / ".git-guard" / "contribution.md", scope="worktree")
+        if original_branch:
+            self.git_no_hooks("checkout", original_branch)
+        self.git_no_hooks("branch", "-D", branch)
+        branch_log = self.repo / self.branch_log_path_for_branch(branch)
+        if branch_log.exists():
+            branch_log.unlink()
+
+    def assert_runtime_auto_sync_repairs_installed_runtime_on_pre_commit(self) -> None:
+        repair_branch = self.runtime_auto_sync_feature_branch("runtime-auto-sync-pre-commit-repair")
+        if repair_branch is None:
+            return
+        original_branch = self.git_no_hooks("branch", "--show-current").stdout.strip()
+        self.create_branch(repair_branch, "dev")
+        branch_log = self.branch_log_path_for_branch(repair_branch)
+
         runtime_path = self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py"
         runtime_path.write_text("#!/usr/bin/env python3\n# stale runtime sentinel\n", encoding="utf-8")
         runtime_path.chmod(0o755)
         support_path = self.repo / ".git-guard" / "runtime" / "git_ops.py"
         support_path.write_text("# stale runtime support sentinel\n", encoding="utf-8")
+        self.git_no_hooks("add", ".git-guard")
+        self.write_file("runtime-sync-precommit.txt", "runtime auto-sync pre-commit repair\n")
+        self.git("add", "runtime-sync-precommit.txt")
+        self.ensure_current_branch_log_staged()
 
-        result = self.git("branch", "forbidden/runtime-auto-sync", "HEAD", check=False)
+        result = self.git("commit", "-m", "runtime auto-sync pre-commit repair", check=False)
         combined = result.stdout + result.stderr
-        if "BRANCH_NAME_NOT_ALLOWED" not in combined:
+        if result.returncode == 0 or "GIT_GUARD_MANAGED_FILES_NOT_STAGED" not in combined:
             raise AssertionError(
-                f"{self.name}: expected repaired runtime to enforce branch policy\n"
+                f"{self.name}: expected pre-commit auto-sync to require staged managed files\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
         if "runtime auto-sync updated installed assets" not in combined:
             raise AssertionError(
-                f"{self.name}: expected runtime auto-sync to print a visible update message\n"
+                f"{self.name}: expected pre-commit runtime auto-sync to print a visible update message\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
         if ".git-guard/runtime/policy_reference_transaction_hook.py" not in combined:
@@ -271,8 +418,33 @@ class PolicyHookTestBase:
         runtime_cache_path = self.repo / ".git-guard" / "runtime" / "__pycache__"
         if runtime_cache_path.exists():
             raise AssertionError(f"{self.name}: runtime hook should not create bytecode cache: {runtime_cache_path}")
+        self.git_no_hooks("restore", "--staged", ".git-guard", "runtime-sync-precommit.txt", branch_log)
+        work_path = self.repo / "runtime-sync-precommit.txt"
+        if work_path.exists():
+            work_path.unlink()
+        branch_log_path = self.repo / branch_log
+        if branch_log_path.exists():
+            branch_log_path.unlink()
+        install_policy_hook(self.repo, self.repo / ".git-guard" / "contribution.md", scope="worktree")
+        if original_branch:
+            self.git_no_hooks("checkout", original_branch)
+        self.git_no_hooks("branch", "-D", repair_branch)
+        repair_branch_log = self.repo / self.branch_log_path_for_branch(repair_branch)
+        if repair_branch_log.exists():
+            repair_branch_log.unlink()
+
+    def runtime_auto_sync_feature_branch(self, topic: str) -> str | None:
+        for item in self.policy.get("branch_from", []):
+            if item.get("source") == "dev" and item.get("target") == "feat/*":
+                return f"feat/{topic}"
+        return None
 
     def assert_runtime_auto_sync_can_be_disabled(self) -> None:
+        branch = self.runtime_auto_sync_feature_branch("runtime-auto-sync-disabled")
+        if branch is None:
+            return
+        original_branch = self.git_no_hooks("branch", "--show-current").stdout.strip()
+        self.create_branch(branch, "dev")
         config_path = self.repo / ".git-guard" / "config.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         config.setdefault("runtime", {})["auto_sync"] = False
@@ -282,26 +454,34 @@ class PolicyHookTestBase:
         stale_runtime = "#!/usr/bin/env python3\n# stale runtime sentinel disabled\n"
         runtime_path.write_text(stale_runtime, encoding="utf-8")
         runtime_path.chmod(0o755)
+        self.write_file("runtime-sync-disabled.txt", "runtime auto-sync disabled\n")
+        self.git("add", "runtime-sync-disabled.txt")
+        self.ensure_current_branch_log_staged()
 
-        result = self.git("branch", "forbidden/runtime-auto-sync-disabled", "HEAD", check=False)
+        result = self.git("commit", "-m", "runtime auto-sync disabled", check=False)
         combined = result.stdout + result.stderr
+        if result.returncode != 0:
+            raise AssertionError(
+                f"{self.name}: disabled runtime auto-sync should allow stale runtime to remain in place\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
         if "runtime auto-sync updated installed assets" in combined:
             raise AssertionError(
                 f"{self.name}: disabled runtime auto-sync should not print an update message\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
-        if "BRANCH_NAME_NOT_ALLOWED" in combined:
-            raise AssertionError(
-                f"{self.name}: runtime auto-sync ran even though config disabled it\n"
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-            )
         if runtime_path.read_text(encoding="utf-8") != stale_runtime:
             raise AssertionError(f"{self.name}: disabled runtime auto-sync should not repair runtime")
-        self.git_no_hooks("branch", "-D", "forbidden/runtime-auto-sync-disabled", check=False)
 
         config.setdefault("runtime", {})["auto_sync"] = True
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         install_policy_hook(self.repo, self.repo / ".git-guard" / "contribution.md", scope="worktree")
+        if original_branch:
+            self.git_no_hooks("checkout", original_branch)
+        self.git_no_hooks("branch", "-D", branch)
+        branch_log = self.repo / self.branch_log_path_for_branch(branch)
+        if branch_log.exists():
+            branch_log.unlink()
 
     def expect_rejected(
         self,

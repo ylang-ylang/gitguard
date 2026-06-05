@@ -30,7 +30,7 @@ uv tool install --editable . --force
 The command path, such as `~/.local/bin/git-guard`, usually stays the same; the important part is which editable checkout the uv tool points at. The project version may not distinguish local worktrees, so confirm a runtime-sync capable install by checking generated hooks:
 
 ```bash
-rg git_guard_runtime_sync .git-guard/hooks
+rg git_guard_runtime_sync .git-guard/hooks/common.sh .git-guard/hooks/pre-commit
 ```
 
 For one-off development checks against the current checkout, prefer `PYTHONPATH=src python -m cli ...` so PATH cannot accidentally use an older uv tool.
@@ -77,7 +77,7 @@ If the same source and target appear once without `tag:"..."` and once with `tag
 
 For tag policies, Git Guard follows the Mermaid merge direction: `checkout TARGET` followed by `merge SOURCE tag:"..."` means the tag must point at the merge result on `TARGET`. For example, `checkout main` then `merge dev tag:"V#.#"` expects `V#.#` to point at the relevant `main` commit, not the `dev` head.
 
-For `feat/*` and `infra/*`, an immediately adjacent reverse merge before the normal merge declares `sync_merge_required`. `checkout "feat/*"` followed by `merge dev`, then `checkout dev` and `merge "feat/*"`, means feature branches must finish with a sync merge from the current `dev` before they can merge back into `dev`. If the feature branch commits again after that sync merge, it must sync `dev` again before merging back.
+For `feat/*` and `infra/*`, an immediately adjacent reverse merge before the normal merge declares `sync_merge_required`. `checkout "feat/*"` followed by `merge dev`, then `checkout dev` and `merge "feat/*"`, means feature branches must contain the current `dev` head before they can merge back into `dev`. A branch may continue committing after it absorbs `dev`; it only needs to sync again if `dev` advances beyond the branch's history before the merge back.
 
 Wildcard branch families should be quoted:
 
@@ -157,13 +157,19 @@ It copies the packaged runtime hook into the target repo:
 <repo>/.git-guard/runtime/*.py
 ```
 
-Installed hook wrappers can refresh these Git Guard managed files when a hook fires. If `.git-guard/config.json` keeps `runtime.auto_sync` enabled, the wrapper resolves the current machine's `git-guard` command and runs install again with the repo-local policy source:
+The installed `pre-commit` wrapper can refresh these Git Guard managed files before an ordinary commit is created. If `.git-guard/config.json` keeps `runtime.auto_sync` enabled, the wrapper resolves the current machine's `git-guard` command and runs install again with the repo-local policy source:
 
 ```bash
 git-guard install --repo <repo> --config <repo>/.git-guard/contribution.md --scope <current-scope>
 ```
 
 This is a local content check, not a network update check. The repo is current when the files that the current local `git-guard install` would generate already match `.git-guard/`; otherwise install rewrites the changed managed files before the runtime hook runs. When runtime auto-sync rewrites anything, the hook prints a visible `git-guard: runtime auto-sync updated installed assets: ...` message naming the updated files. The repo does not store absolute paths to the Git Guard installation, so two machines with the same protected repo use the `git-guard` available on each machine. Existing installations need one manual reinstall before they have wrappers that can auto-sync themselves.
+
+Runtime auto-sync is skipped when the current worktree is on a policy protected branch such as `main` or `dev`. Protected branch hooks should validate only and must not create worktree changes before an integration merge. Hook entrypoints other than ordinary `pre-commit`, including `reference-transaction`, `pre-merge-commit`, and `pre-push`, also do not run runtime auto-sync because those operations cannot reliably include generated `.git-guard/` files in the Git operation that triggered the hook. Run explicit `git-guard install` on a short-lived branch when checked-in hook/runtime assets need to change, then merge those assets through the normal branch flow.
+
+When `.git-guard/` is tracked by the repository, the installed pre-commit hook requires dirty `.git-guard/` files to be staged. This prevents runtime auto-sync updates on short-lived branches from remaining local-only changes that agents accidentally omit from the commit.
+
+When developing Git Guard itself, a source checkout may disable `runtime.auto_sync` so an older installed `git-guard` command does not rewrite the checked-in runtime with stale code. In that mode, keep `.git-guard/runtime/` updated explicitly with the matching `src/runtime/` changes.
 
 After a protected repository is cloned, users do not need to install this Python package just to enable the checked-in hook. They can run:
 
@@ -202,7 +208,8 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
     "enabled": true
   },
   "runtime": {
-    "auto_sync": true
+    "auto_sync": true,
+    "require_managed_files_staged": true
   },
   "submodules": {
     "allowed_branches": [
@@ -223,6 +230,8 @@ If `branch_logs.force_required` is `true`, ordinary commits on policy-managed br
 
 The installed `pre-commit` hook rejects untracked or unstaged branch-log files for ordinary commits. This keeps required branch logs from becoming local-only notes that are not actually recorded in the branch history.
 
+If `.git-guard/` is tracked and `runtime.require_managed_files_staged` is enabled, the installed `pre-commit` hook rejects untracked or unstaged `.git-guard/` files with `GIT_GUARD_MANAGED_FILES_NOT_STAGED`. Stage generated hook/runtime updates, or restore them explicitly, before committing.
+
 `protected_branches.enabled` controls merge-source enforcement for protected branches such as `dev` and `main`. The default `true` requires protected branches to move only through policy-declared sources. Setting it to `false` is an emergency escape hatch for direct fast-forward commits on protected branches; deletes and non-fast-forward updates are still rejected.
 
 `branch_logs.path` is target-local during policy-managed merges. For the default directory path, merge commits normalize `.branch_logs/` to `.branch_logs/.gitkeep`, so source branch notes such as `.branch_logs/feat.md` do not propagate into the target branch's final tree.
@@ -235,7 +244,7 @@ Optional tag rules do not create pending tag requirements. If a matching tag is 
 
 Policy-managed branches cannot be moved to include another managed branch head unless the Mermaid graph declares that merge direction. This is independent of merge strategy: normal allowed merges may be fast-forward or `--no-ff`. For example, if the graph has `dev to main` but no `main to dev`, `git branch -f dev main` is rejected even when the underlying ref move is a fast-forward.
 
-If a `feat/*` or `infra/*` rule has an immediately adjacent reverse sync merge in the Mermaid graph, the protected target merge is rejected with `SYNC_MERGE_REQUIRED` unless the source is already based on the target's current old head or the source head is the merge commit that just merged that target old head into the source. Merge the target branch into the source branch as the final source-branch step before merging back.
+If a `feat/*` or `infra/*` rule has an immediately adjacent reverse sync merge in the Mermaid graph, the protected target merge is rejected with `SYNC_MERGE_REQUIRED` unless the target's current old head is already an ancestor of the source head. Merge the target branch into the source branch when the target has commits that the source does not contain; if the source already contains the target head, the merge may proceed directly.
 
 Linked worktrees cannot create new local branches while the hook is enabled. A linked worktree is detected when `git rev-parse --git-dir` and `git rev-parse --git-common-dir` resolve to different directories. In that case, `git branch new-name`, `git switch -c new-name`, and other branch-creation ref transactions are rejected with `WORKTREE_BRANCH_CREATION_NOT_ALLOWED`. Create the new branch from the main worktree and give it its own worktree directory instead.
 
