@@ -106,6 +106,7 @@ The policy integration tests cover:
 - accepting source branches that continue committing after absorbing the current protected target head;
 - rejecting commits that leave tracked `.git-guard/` hook/runtime changes unstaged;
 - skipping runtime auto-sync while the current worktree is on a protected branch;
+- limiting runtime auto-sync to ordinary pre-commit hooks so ref updates, merge commits, and push hooks do not write the worktree;
 - accepting the normal configured branch families, required merge targets, and tag rules before the separator.
 
 Not yet covered by the generated Mermaid policy alone:
