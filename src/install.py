@@ -360,9 +360,6 @@ def reference_transaction_hook() -> str:
             "#!/usr/bin/env bash",
             "set -eu",
             *source_common_hook_script(),
-            'if [ "${1:-}" = "prepared" ]; then',
-            "  git_guard_runtime_sync",
-            "fi",
             'git_guard_exec_runtime "$@"',
             "",
         ]
@@ -440,7 +437,6 @@ def pre_push_hook() -> str:
             "#!/usr/bin/env bash",
             "set -eu",
             *source_common_hook_script(),
-            "git_guard_runtime_sync",
             'git_guard_exec_runtime pre-push "$@"',
             "",
         ]
@@ -466,7 +462,6 @@ def pre_merge_commit_hook() -> str:
             "#!/usr/bin/env bash",
             "set -eu",
             *source_common_hook_script(),
-            "git_guard_runtime_sync",
             "git_guard_exec_runtime pre-merge-commit",
             "",
         ]

@@ -30,7 +30,7 @@ uv tool install --editable . --force
 The command path, such as `~/.local/bin/git-guard`, usually stays the same; the important part is which editable checkout the uv tool points at. The project version may not distinguish local worktrees, so confirm a runtime-sync capable install by checking generated hooks:
 
 ```bash
-rg git_guard_runtime_sync .git-guard/hooks
+rg git_guard_runtime_sync .git-guard/hooks/common.sh .git-guard/hooks/pre-commit
 ```
 
 For one-off development checks against the current checkout, prefer `PYTHONPATH=src python -m cli ...` so PATH cannot accidentally use an older uv tool.
@@ -157,7 +157,7 @@ It copies the packaged runtime hook into the target repo:
 <repo>/.git-guard/runtime/*.py
 ```
 
-Installed hook wrappers can refresh these Git Guard managed files when a hook fires. If `.git-guard/config.json` keeps `runtime.auto_sync` enabled, the wrapper resolves the current machine's `git-guard` command and runs install again with the repo-local policy source:
+The installed `pre-commit` wrapper can refresh these Git Guard managed files before an ordinary commit is created. If `.git-guard/config.json` keeps `runtime.auto_sync` enabled, the wrapper resolves the current machine's `git-guard` command and runs install again with the repo-local policy source:
 
 ```bash
 git-guard install --repo <repo> --config <repo>/.git-guard/contribution.md --scope <current-scope>
@@ -165,7 +165,7 @@ git-guard install --repo <repo> --config <repo>/.git-guard/contribution.md --sco
 
 This is a local content check, not a network update check. The repo is current when the files that the current local `git-guard install` would generate already match `.git-guard/`; otherwise install rewrites the changed managed files before the runtime hook runs. When runtime auto-sync rewrites anything, the hook prints a visible `git-guard: runtime auto-sync updated installed assets: ...` message naming the updated files. The repo does not store absolute paths to the Git Guard installation, so two machines with the same protected repo use the `git-guard` available on each machine. Existing installations need one manual reinstall before they have wrappers that can auto-sync themselves.
 
-Runtime auto-sync is skipped when the current worktree is on a policy protected branch such as `main` or `dev`. Protected branch hooks should validate only and must not create worktree changes before an integration merge. Run explicit `git-guard install` on a short-lived branch when checked-in hook/runtime assets need to change, then merge those assets through the normal branch flow.
+Runtime auto-sync is skipped when the current worktree is on a policy protected branch such as `main` or `dev`. Protected branch hooks should validate only and must not create worktree changes before an integration merge. Hook entrypoints other than ordinary `pre-commit`, including `reference-transaction`, `pre-merge-commit`, and `pre-push`, also do not run runtime auto-sync because those operations cannot reliably include generated `.git-guard/` files in the Git operation that triggered the hook. Run explicit `git-guard install` on a short-lived branch when checked-in hook/runtime assets need to change, then merge those assets through the normal branch flow.
 
 When `.git-guard/` is tracked by the repository, the installed pre-commit hook requires dirty `.git-guard/` files to be staged. This prevents runtime auto-sync updates on short-lived branches from remaining local-only changes that agents accidentally omit from the commit.
 
