@@ -99,7 +99,7 @@ class DevOnlyHookTest(PolicyHookTestBase):
         self.assert_pending_tag_count(0)
 
     def state(self) -> dict[str, Any]:
-        return json.loads((self.repo / ".git" / "git-guard-state.json").read_text(encoding="utf-8"))
+        return super().state()
 
     def assert_pending_tag_count(self, expected: int) -> None:
         pending_tags = self.state().get("pending_tags", {})
