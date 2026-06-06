@@ -41,6 +41,26 @@ DEFAULT_CONFIG = {
         "reject_branch_creation_in_linked_worktree": True,
     },
 }
+GIT_LOCAL_ENV_VARS = {
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NAMESPACE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_QUARANTINE_PATH",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+}
 
 
 class InstallError(RuntimeError):
@@ -134,6 +154,7 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
     changes: list[str] = []
 
     installed_contribution_path = install_dir / "contribution.md"
+    initial_install = not installed_contribution_path.exists()
     record_change(
         changes,
         ".git-guard/contribution.md",
@@ -156,7 +177,7 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
     )
     record_change(changes, ".git-guard/config.json", ensure_config_defaults(config_path))
     config = load_config(config_path)
-    initial_branch_log_path = branch_log_initial_path(repo, policy, config) if os.environ.get("GG_RUNTIME_SYNC_ACTIVE") != "1" else None
+    initial_branch_log_path = branch_log_initial_path(repo, policy, config) if initial_install else None
     if initial_branch_log_path:
         record_change(
             changes,
@@ -204,10 +225,6 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
 
     record_change(changes, "core.hooksPath", configure_hooks_path(repo, scope))
 
-    if os.environ.get("GG_RUNTIME_SYNC_ACTIVE") == "1":
-        report_runtime_auto_sync(changes)
-        return
-
     print(f"installed git-guard hook into {repo}")
     print(f"scope={scope}")
     print("core.hooksPath=.git-guard/hooks")
@@ -222,15 +239,6 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
 def record_change(changes: list[str], label: str, changed: bool) -> None:
     if changed:
         changes.append(label)
-
-
-def report_runtime_auto_sync(changes: list[str]) -> None:
-    if not changes:
-        return
-    print(
-        "git-guard: runtime auto-sync updated installed assets: " + ", ".join(changes),
-        file=sys.stderr,
-    )
 
 
 def default_config_text() -> str:
@@ -409,7 +417,6 @@ def source_common_hook_script() -> list[str]:
 def runtime_sync_shell_function() -> list[str]:
     return [
         "git_guard_runtime_sync() {",
-        '  [ "${GG_RUNTIME_SYNC_ACTIVE:-}" != "1" ] || return 0',
         '  [ -f "$GG_CONFIG_JSON" ] || return 0',
         '  current_ref="$(git symbolic-ref -q HEAD 2>/dev/null || true)"',
         '  if [ -n "$current_ref" ] && [ -f "$GG_POLICY_JSON" ]; then',
@@ -424,7 +431,7 @@ def runtime_sync_shell_function() -> list[str]:
         '    worktree|local|global) ;;',
         '    *) scope="local" ;;',
         "  esac",
-        '  if ! GG_RUNTIME_SYNC_ACTIVE=1 "${git_guard_args[@]}" install --repo "$GG_REPO_ROOT" --config "$GG_REPO_ROOT/.git-guard/contribution.md" --scope "$scope" >/dev/null; then',
+        '  if ! "${git_guard_args[@]}" install --repo "$GG_REPO_ROOT" --config "$GG_REPO_ROOT/.git-guard/contribution.md" --scope "$scope" >/dev/null; then',
         '    printf "%s\\n" "git-guard: runtime auto-sync failed; continuing with installed runtime" >&2',
         "  fi",
         "}",
@@ -634,8 +641,10 @@ def resolved_git_dir(repo: Path) -> Path:
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    env = clean_git_env(os.environ.copy())
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -647,7 +656,7 @@ def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
 
 
 def git_literal_pathspec(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
+    env = clean_git_env(os.environ.copy())
     env["GIT_LITERAL_PATHSPECS"] = "1"
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -660,6 +669,13 @@ def git_literal_pathspec(repo: Path, *args: str, check: bool = True) -> subproce
     if check and result.returncode != 0:
         raise InstallError(f"git {' '.join(args)} failed in {repo}\n{result.stderr.strip()}")
     return result
+
+
+def clean_git_env(env: dict[str, str]) -> dict[str, str]:
+    clean_env = dict(env)
+    for name in GIT_LOCAL_ENV_VARS:
+        clean_env.pop(name, None)
+    return clean_env
 
 
 if __name__ == "__main__":
