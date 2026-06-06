@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, ClassVar
+from typing import Any, Callable, ClassVar
 
 from install import install as install_policy_hook
 from install import load_runtime_hook_text
@@ -40,6 +40,7 @@ class PolicyHookTestBase:
         self.config_dir = config_dir
         self.name = config_dir.name
         self.work_root = work_root / self.name
+        self.linked_work_root = work_root / f"{self.name}-test-linked-worktree"
         self.repo = self.work_root
         self.keep = keep
         self.policy = load_policy_from_markdown(config_dir / "contribution.md")
@@ -48,10 +49,14 @@ class PolicyHookTestBase:
     def run(self) -> None:
         if self.work_root.exists() and not self.keep:
             shutil.rmtree(self.work_root)
+        if self.linked_work_root.exists() and not self.keep:
+            shutil.rmtree(self.linked_work_root)
         self.work_root.mkdir(parents=True, exist_ok=True)
 
         self.create_initial_repo()
+        self.materialize_linked_test_worktree()
         self.install_hook()
+        self.set_linked_worktree_branch_creation_guard(False)
         self.create_correct_git_dag_tree()
         self.create_rejection_test_fixtures()
         self.mark_rejection_tests_start()
@@ -80,6 +85,25 @@ class PolicyHookTestBase:
 
     def checkout_final_branch(self) -> None:
         raise NotImplementedError
+
+    def materialize_linked_test_worktree(self) -> None:
+        initial_branch = self.git_no_hooks("branch", "--show-current").stdout.strip()
+        if not initial_branch:
+            raise AssertionError(f"{self.name}: initial repo must be on a branch before linked worktree setup")
+
+        self.git_no_hooks("checkout", "--detach", initial_branch)
+        self.git_no_hooks("worktree", "prune", check=False)
+        self.git_no_hooks("worktree", "add", str(self.linked_work_root), initial_branch)
+        self.repo = self.linked_work_root
+        self.assert_test_repo_is_linked_worktree()
+
+    def assert_test_repo_is_linked_worktree(self) -> None:
+        git_dir = Path(self.git_no_hooks("rev-parse", "--git-dir").stdout.strip())
+        common_dir = Path(self.git_no_hooks("rev-parse", "--git-common-dir").stdout.strip())
+        if not git_dir.is_absolute():
+            raise AssertionError(f"{self.name}: policy tests should run from linked worktree with absolute git dir, got {git_dir}")
+        if git_dir == common_dir:
+            raise AssertionError(f"{self.name}: policy tests should run from linked worktree, got common git dir {common_dir}")
 
     def assert_dev_direct_commit_policy_matches_rules(self) -> None:
         rules = (self.config_dir / "contribution.md").read_text(encoding="utf-8")
@@ -162,6 +186,7 @@ class PolicyHookTestBase:
         self.assert_local_install_clears_worktree_hooks_path_override()
         self.assert_git_guard_managed_files_must_be_staged()
         self.assert_runtime_auto_sync_skips_protected_pre_commit()
+        self.set_linked_worktree_branch_creation_guard(False)
         self.assert_reference_transaction_does_not_auto_sync()
         self.assert_pre_push_does_not_auto_sync()
         self.assert_runtime_auto_sync_repairs_installed_runtime_on_pre_commit()
@@ -608,10 +633,13 @@ class PolicyHookTestBase:
         self.git_no_hooks("reset", "--hard", "HEAD")
 
     def assert_linked_worktree_branch_creation_guard(self) -> None:
-        main_branch = "forbidden/from-main-worktree"
+        self.assert_test_repo_is_linked_worktree()
+        self.set_linked_worktree_branch_creation_guard(False)
+
+        policy_rejected_branch = "forbidden/from-linked-policy-test"
         linked_branch = "forbidden/from-linked-worktree"
 
-        self.expect_rejected(["branch", main_branch, "HEAD"], "BRANCH_NAME_NOT_ALLOWED")
+        self.expect_rejected(["branch", policy_rejected_branch, "HEAD"], "BRANCH_NAME_NOT_ALLOWED")
         self.assert_existing_protected_branch_worktree_add_allowed()
 
         linked_repo = self.work_root.parent / f"{self.name}-linked-worktree"
@@ -880,6 +908,12 @@ class PolicyHookTestBase:
         config.setdefault("submodules", {})["main_guard"] = {"enabled": True}
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
+    def set_linked_worktree_branch_creation_guard(self, enabled: bool) -> None:
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config.setdefault("worktree", {})["reject_branch_creation_in_linked_worktree"] = enabled
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
     def reset_parent_and_submodule(self, parent_ref: str, submodule: Path) -> None:
         self.git_no_hooks("reset", "--hard", parent_ref)
         if submodule.exists():
@@ -1013,6 +1047,13 @@ class PolicyHookTestBase:
             ref, object_name = line.split(" ", 1)
             refs[ref] = object_name
         return RefSnapshot(refs=refs)
+
+    def state(self) -> dict[str, Any]:
+        return json.loads(self.git_guard_state_path().read_text(encoding="utf-8"))
+
+    def git_guard_state_path(self) -> Path:
+        raw = self.git_no_hooks("rev-parse", "--path-format=absolute", "--git-path", "git-guard-state.json").stdout.strip()
+        return Path(raw)
 
     def git(self, *args: str, check: bool = True) -> CommandResult:
         return git_raw(self.repo, *args, check=check)
