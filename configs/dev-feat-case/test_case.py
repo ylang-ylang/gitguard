@@ -203,6 +203,15 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
             if expected_line not in remote_tags:
                 raise AssertionError(f"{self.name}: remote is missing synced tag {tag}\nexpected: {expected_line}\nremote tags:\n{remote_tags}")
 
+        run_raw(self.work_root.parent, ["git", "--git-dir", str(remote), "update-ref", "refs/tags/V1.1", self.rev_parse("V1.0")])
+        result = self.git_with_env({"GG_INTERNAL_TAG_SYNC": "1"}, "push", "origin", "dev:dev", check=False)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or "PUSH_TAG_CONFLICT" not in combined:
+            raise AssertionError(
+                f"{self.name}: GG_INTERNAL_TAG_SYNC env should not bypass pre-push tag conflict checks\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+
     def assert_pre_push_auto_sync_can_be_disabled(self) -> None:
         config_path = self.repo / ".git-guard" / "config.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))

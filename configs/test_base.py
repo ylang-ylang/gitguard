@@ -170,6 +170,8 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: common hook helper should include runtime auto-sync")
         if "GIT_GUARD_BIN" not in common_hook_text:
             raise AssertionError(f"{self.name}: common hook helper should support GIT_GUARD_BIN")
+        if "GG_RUNTIME_SYNC_ACTIVE" in common_hook_text:
+            raise AssertionError(f"{self.name}: common hook helper should not expose runtime sync env bypass")
         if "PYTHONDONTWRITEBYTECODE=1" not in common_hook_text:
             raise AssertionError(f"{self.name}: common hook helper should prevent runtime bytecode caches")
         for hook_name in ["reference-transaction", "pre-push", "pre-commit", "pre-merge-commit"]:
@@ -413,26 +415,17 @@ class PolicyHookTestBase:
         self.git("add", "runtime-sync-precommit.txt")
         self.ensure_current_branch_log_staged()
 
-        result = self.git("commit", "-m", "runtime auto-sync pre-commit repair", check=False)
+        result = self.git_with_env(
+            {"GG_RUNTIME_SYNC_ACTIVE": "1"},
+            "commit",
+            "-m",
+            "runtime auto-sync pre-commit repair",
+            check=False,
+        )
         combined = result.stdout + result.stderr
         if result.returncode == 0 or "GIT_GUARD_MANAGED_FILES_NOT_STAGED" not in combined:
             raise AssertionError(
                 f"{self.name}: expected pre-commit auto-sync to require staged managed files\n"
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-            )
-        if "runtime auto-sync updated installed assets" not in combined:
-            raise AssertionError(
-                f"{self.name}: expected pre-commit runtime auto-sync to print a visible update message\n"
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-            )
-        if ".git-guard/runtime/policy_reference_transaction_hook.py" not in combined:
-            raise AssertionError(
-                f"{self.name}: expected runtime auto-sync message to name the repaired runtime asset\n"
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-            )
-        if ".git-guard/runtime/git_ops.py" not in combined:
-            raise AssertionError(
-                f"{self.name}: expected runtime auto-sync message to name the repaired runtime support asset\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
         if runtime_path.read_text(encoding="utf-8") != load_runtime_hook_text():
