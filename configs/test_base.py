@@ -723,6 +723,19 @@ class PolicyHookTestBase:
         self.assert_output_not_contains(result, "SUBMODULE_")
 
         submodule = self.repo / "modules" / "lib"
+        self.ensure_current_branch_log_staged()
+        result = self.git_with_env(
+            {
+                "GIT_DIR": self.absolute_git_dir(),
+                "GIT_WORK_TREE": str(self.repo),
+            },
+            "commit",
+            "--allow-empty",
+            "-m",
+            "submodule guard ignores inherited parent git env",
+        )
+        self.assert_output_not_contains(result, "SUBMODULE_COMMIT_MISSING")
+
         origin_base = self.git_in(submodule, "rev-parse", "--verify", "origin/main~1").stdout.strip()
         self.git_in(submodule, "checkout", "--detach", origin_base)
         self.git("add", "modules/lib")
@@ -1004,15 +1017,24 @@ class PolicyHookTestBase:
     def git(self, *args: str, check: bool = True) -> CommandResult:
         return git_raw(self.repo, *args, check=check)
 
+    def git_with_env(self, env_overrides: dict[str, str], *args: str, check: bool = True) -> CommandResult:
+        return git_raw(self.repo, *args, check=check, env_overrides=env_overrides)
+
     def git_no_hooks(self, *args: str, check: bool = True) -> CommandResult:
         return git_raw(self.repo, "-c", "core.hooksPath=.git/hooks", *args, check=check)
 
     def run_command(self, args: list[str], check: bool = True) -> CommandResult:
         return run_raw(self.repo, args, check=check)
 
+    def absolute_git_dir(self) -> str:
+        raw = self.git_no_hooks("rev-parse", "--git-dir").stdout.strip()
+        path = Path(raw)
+        if not path.is_absolute():
+            path = self.repo / path
+        return str(path.resolve())
 
-def git_raw(cwd: Path, *args: str, check: bool = True) -> CommandResult:
-    return run_raw(cwd, ["git", *args], check=check)
+def git_raw(cwd: Path, *args: str, check: bool = True, env_overrides: dict[str, str] | None = None) -> CommandResult:
+    return run_raw(cwd, ["git", *args], check=check, env_overrides=env_overrides)
 
 
 def ref_exists(cwd: Path, ref: str) -> bool:
@@ -1024,7 +1046,7 @@ def branch_log_slug(branch: str) -> str:
     return slug or "branch"
 
 
-def run_raw(cwd: Path, args: list[str], check: bool = True) -> CommandResult:
+def run_raw(cwd: Path, args: list[str], check: bool = True, env_overrides: dict[str, str] | None = None) -> CommandResult:
     env = os.environ.copy()
     env.setdefault("GIT_AUTHOR_NAME", "Policy Hook Test")
     env.setdefault("GIT_AUTHOR_EMAIL", "policy-hook-test@example.invalid")
@@ -1033,6 +1055,8 @@ def run_raw(cwd: Path, args: list[str], check: bool = True) -> CommandResult:
     existing_pythonpath = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(PROJECT_ROOT / "src") if not existing_pythonpath else f"{PROJECT_ROOT / 'src'}{os.pathsep}{existing_pythonpath}"
     env.setdefault("GIT_GUARD_BIN", "python3 -m cli")
+    if env_overrides:
+        env.update(env_overrides)
     result = subprocess.run(
         args,
         cwd=str(cwd),
