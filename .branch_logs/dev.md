@@ -7,3 +7,4 @@
 - Merge feat/require-managed-files-staged to keep runtime auto-sync off protected branches and require staged managed hook files.
 - Merge feat/commit-only-runtime-sync to prevent non-commit hooks from writing runtime sync changes.
 - Merge feat/clean-nested-git-env to isolate nested runtime Git commands from parent hook env and run policy tests from linked worktrees.
+- Merge feat/remove-runtime-env-bypass to remove user-injectable hook runtime sentinel env variables.
