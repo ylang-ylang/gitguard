@@ -111,6 +111,16 @@ v#.#.0
 v=.=.#
 ```
 
+## Workflow
+
+Protected branches such as `dev` and `main` are integration-only. Do not develop on their checkouts.
+
+- Create a working branch (`feat/*`, `case/*/*`, ...) **before editing anything**, and create it from the **main worktree**. Linked worktrees reject branch creation with `WORKTREE_BRANCH_CREATION_NOT_ALLOWED`; run `git worktree add <path> -b <name>` from the main worktree so each branch gets its own directory.
+- Keep protected-branch checkouts for integration merges and read-only verification only.
+- An editable-install checkout (uv tool / pip `-e`) is not a workspace: it is only the path the `git-guard` command reads. Develop on a feature branch; if the command should track a different checkout, reinstall the editable tool from there.
+- Merge back through the declared flow: sync the target into your branch when the graph requires it, then merge. Delete merged branches from the main worktree.
+- If a repository's own installed hook rejects legitimate operations because the checked-out runtime is older than the local Git (for example `HOOK_UNSUPPORTED_PHASE` on newer Git), refresh it with `git-guard install --repo <repo> --config <repo>/.git-guard/contribution.md` from a checkout whose policy allows the operation, and restore the worktree afterwards.
+
 ## Install Hook
 
 Install one config into a target repository:

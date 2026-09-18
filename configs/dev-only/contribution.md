@@ -29,3 +29,7 @@ gitGraph TB:
 - `V#.#` tags are optional. If created, they must point to a `main` commit produced by the `dev` to `main` merge history.
 - `main` must not receive direct commits.
 - Ad hoc tags are not allowed; release tags are allowed only when they satisfy the optional `dev` to `main` tag rule.
+
+## Workflow
+
+`main` is integration-only. Do your work on `dev` and merge it through the declared flow; never commit directly on `main`.
