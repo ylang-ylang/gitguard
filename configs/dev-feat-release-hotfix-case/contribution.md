@@ -73,3 +73,7 @@ gitGraph TB:
 - `dev` is the integration branch and must not receive direct commits after the policy is installed.
 - `#` in tag patterns means one or more decimal digits.
 - `=` in tag patterns means the same numeric component as the base release tag for this source branch.
+
+## Workflow
+
+`main` and `dev` are integration-only. Create short-lived `feat/*` or `case/*/*` branches before editing — always from the main worktree, because linked worktrees cannot create branches — and merge back through the declared flow. Never develop directly on a protected-branch checkout.
