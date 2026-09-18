@@ -150,6 +150,7 @@ It copies the packaged runtime hook into the target repo:
 <repo>/.git-guard/enable.sh
 <repo>/.git-guard/hooks/pre-commit
 <repo>/.git-guard/hooks/pre-merge-commit
+<repo>/.git-guard/hooks/post-commit
 <repo>/.git-guard/hooks/pre-push
 <repo>/.git-guard/hooks/reference-transaction
 <repo>/.git-guard/policy.json
@@ -197,6 +198,12 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
 
 ```json
 {
+  "auto_push": {
+    "enabled": false,
+    "include_protected": false,
+    "remote": "origin",
+    "timeout_seconds": 15
+  },
   "branch_logs": {
     "path": ".branch_logs/",
     "force_required": true
@@ -252,6 +259,8 @@ This guard only covers branch creation because it is enforced by the `reference-
 
 Before any push, the installed `pre-push` hook checks local tags that satisfy the configured release tag rules. If `.git-guard/config.json` keeps `pre_push.auto_push_missing_tags` enabled and a matching local release tag is missing from the target remote, the hook prints a visible `auto-pushing missing release tags` message and pushes that tag first. If the remote already has the same tag name pointing at a different object, the push is rejected with `PUSH_TAG_CONFLICT`.
 
+If `.git-guard/config.json` enables `auto_push.enabled`, the installed `post-commit` hook pushes the current branch tip to `auto_push.remote` after every ordinary or merge commit. This is a publication convenience layer, not a policy mechanism: it is disabled by default, it never blocks or fails the commit, and it prints a visible `auto-pushed <ref> -> <remote>` line on success or an `AUTO_PUSH_FAILED` warning on failure (no retries; the next commit pushes again). Pushes go through the normal `pre-push` hook, so release tag checks and auto-push apply as usual. Branches in `protected_refs` are skipped unless `auto_push.include_protected` is enabled. When the branch upstream is already up to date, the push is skipped without network access. `auto_push.timeout_seconds` bounds the network wait.
+
 If `.git-guard/config.json` keeps the boolean `submodules.main_guard` enabled, every local branch ref update checks all submodule gitlinks in the target commit. `submodules.allowed_branches` lists branch names or branch patterns, such as `["main", "case/*/*"]`, that may contain a submodule gitlink commit. The default is `["main", "case/*/*"]`.
 
 A gitlink that equals a matching local `refs/remotes/origin/<branch>` tip is accepted silently. A gitlink behind a matching remote-tracking branch is accepted with a visible warning. A gitlink only reachable from a matching local `refs/heads/<branch>` is accepted with a visible warning because it is on an allowed branch name but is not known to be on `origin`. A gitlink that is not reachable from any configured branch is rejected with `SUBMODULE_COMMIT_NOT_ALLOWED`. Missing submodule worktrees, missing submodule commits, or missing all configured branch refs are rejected because Git Guard cannot verify the submodule state.
@@ -269,7 +278,20 @@ Runtime state is stored in the target repo's Git directory:
 <repo>/.git/git-guard-hook.log
 ```
 
+`git-guard-hook.log` records every hook trigger: one line per reference-transaction ref update (`phase old new ref`) and one timestamped line per hook invocation (`<iso-time> hook=<name> result=ok|rejected [code=...]`), covering `prepared`/`preparing`, `committed`, `aborted`, `pre-commit`, `pre-merge-commit`, `post-commit`, and `pre-push`. The log lives inside the Git directory, so it is never tracked by Git and needs no `.gitignore` entry; logging failures never affect the hooks.
+
 Because the hook path is repo-relative, a repo generated or installed in Docker can still run from the host without referencing container-only paths.
+
+## Git Version Compatibility
+
+The minimum supported Git version is 2.31 (`git rev-parse --path-format`). The runtime is tested against Git 2.47 and 2.55.
+
+The `reference-transaction` hook payload differs across Git versions, and Git Guard handles both observed behaviors without version-string checks:
+
+- Branch renames never report the new ref to the hook. Git Guard validates rename targets by inspecting the parent `git` process command line, and additionally validates `HEAD` symref updates that point at not-yet-existing branches. A rename to a policy-foreign name is rejected with `BRANCH_NAME_NOT_ALLOWED` whether the renamed branch is checked out or not. If the parent command line is unobservable (non-Linux without `/proc` or `ps`), a rename of a non-current branch cannot be distinguished from a plain deletion and is allowed; renames of the current branch are still caught through the `HEAD` symref update.
+- Some Git versions report ref deletions without the old object value. Protected branch deletions and policy tag deletions are nevertheless rejected (`PROTECTED_REF_DELETE`, `TAG_DELETE_NOT_ALLOWED`). Deleting branches outside the policy namespace and tags that match no policy tag rule remains allowed, so pre-policy or accidental refs can be cleaned up.
+- Git 2.46 and later emit an additional `preparing` phase before `prepared`; both are validated identically.
+- Tag ref transactions report the tag object ID, and during the reference-transaction quarantine the receiving ref does not exist yet. Git Guard peels annotated tag objects to their target commit via `cat-file` before applying tag rules, so both lightweight and annotated release tags are accepted, and creating a matching annotated tag clears the pending tag requirement.
 
 ## Test
 
@@ -283,9 +305,11 @@ Run integration tests in Docker:
 
 ```bash
 mkdir -p .tmp
-docker compose run --rm policy-hook-tests
+docker compose run --rm -T policy-hook-tests < /dev/null
 docker compose down
 ```
+
+Closing stdin is required: one test drives the `pre-push` hook directly, and the hook reads ref updates from stdin until EOF. An interactively proxied compose stdin never reaches EOF and the test would block.
 
 The integration test runner creates one isolated test repo per config:
 
