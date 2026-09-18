@@ -19,6 +19,12 @@ VALID_SCOPES = ("worktree", "local", "global")
 RUNTIME_ENTRYPOINT = "reference_transaction_hook.py"
 INSTALLED_RUNTIME_ENTRYPOINT = "policy_reference_transaction_hook.py"
 DEFAULT_CONFIG = {
+    "auto_push": {
+        "enabled": False,
+        "include_protected": False,
+        "remote": "origin",
+        "timeout_seconds": 15,
+    },
     "branch_logs": {
         "path": ".branch_logs/",
         "force_diff_required": True,
@@ -218,6 +224,13 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
         changes,
         ".git-guard/hooks/pre-merge-commit",
         write_text_if_different(pre_merge_commit_path, pre_merge_commit_hook(), mode=0o755),
+    )
+
+    post_commit_path = hook_dir / "post-commit"
+    record_change(
+        changes,
+        ".git-guard/hooks/post-commit",
+        write_text_if_different(post_commit_path, post_commit_hook(), mode=0o755),
     )
 
     enable_path = install_dir / "enable.sh"
@@ -469,7 +482,19 @@ def pre_merge_commit_hook() -> str:
             "#!/usr/bin/env bash",
             "set -eu",
             *source_common_hook_script(),
-            "git_guard_exec_runtime pre-merge-commit",
+            'git_guard_exec_runtime pre-merge-commit',
+            "",
+        ]
+    )
+
+
+def post_commit_hook() -> str:
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -eu",
+            *source_common_hook_script(),
+            'git_guard_exec_runtime post-commit',
             "",
         ]
     )
