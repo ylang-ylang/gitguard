@@ -26,18 +26,18 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       commit_sha: ${{ steps.plan.outputs.commit_sha }}
     steps:
-      # No checkout or repository code runs before the fixed-main resolution.
+      # No checkout or repository code runs before the fixed-dev resolution.
       - id: trusted
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           import json, os, re, urllib.request
-          req = urllib.request.Request('https://api.github.com/repos/ylang-ylang/gitguard/git/ref/heads/main', headers={'Authorization': 'Bearer '+os.environ['GITHUB_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          req = urllib.request.Request('https://api.github.com/repos/ylang-ylang/gitguard/git/ref/heads/dev', headers={'Authorization': 'Bearer '+os.environ['GITHUB_TOKEN'], 'Accept': 'application/vnd.github+json'})
           with urllib.request.urlopen(req, timeout=60) as response:
               obj = json.load(response)['object']
           if obj['type'] != 'commit' or not re.fullmatch('[0-9a-f]{40}', obj['sha']):
-              raise SystemExit('fixed main did not resolve to a commit')
+              raise SystemExit('fixed dev did not resolve to a commit')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('sha='+obj['sha']+'\n')
           PY

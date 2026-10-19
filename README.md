@@ -376,8 +376,9 @@ tags, merges development branches, or updates installed user machines.
   packaged CLI/hooks and a local-candidate Brew install/test.
 - `release.yml`: automatic entry is a version-tag push; `workflow_dispatch`
   retries an explicit existing tag. Trusted automation is captured from the
-  fixed GitHub main revision before any tagged source runs. Tags must resolve to
-  a full commit already in remote main history, not necessarily its current tip.
+  fixed GitHub dev revision before any tagged source runs. This is the release
+  controller, not the software being shipped: tags must still resolve to a full
+  commit already in remote main history, not necessarily its current tip.
 - A credential-only job checks for the dedicated tap secret without checking out
   or executing source code. A separate `contents: read` job tests, builds and
   executes the verified commit's sdist/wheel and Formula; it has no tap secret.
@@ -403,9 +404,9 @@ anchor; it never rebuilds replacement bytes. Original artifacts are retained for
 verify original assets without rebuilding, adding, or overwriting them.
 
 ```bash
-gh workflow run release.yml --repo ylang-ylang/gitguard --ref main -f tag=V1.18
+gh workflow run release.yml --repo ylang-ylang/gitguard --ref dev -f tag=V1.18
 # Retry only Brew distribution for an already complete published release:
-gh workflow run release-distribution.yml --repo ylang-ylang/gitguard --ref main -f tag=V1.18
+gh workflow run release-distribution.yml --repo ylang-ylang/gitguard --ref dev -f tag=V1.18
 ```
 
 Use the tag actually prepared by the maintainer, not a branch name or a free-form
@@ -414,10 +415,12 @@ downgrade, foreign PR, missing/red check, or replaced release asset is refused.
 
 ### One-time deployment prerequisites
 
-Integrate the automation through the normal branch flow before the first tag
-push. The canonical GitHub default branch is `main`; restrict review/write
-access to this trusted automation boundary. Local git-guard hooks do not protect
-GitHub from direct writes.
+Integrate automation fixes through maintenance branches into `dev` before
+retrying an existing tag. A dev push does not publish software; only a version
+tag or explicit existing-tag retry enters the release workflow, and the package
+source must remain in main history. Restrict review/write access to both dev
+(trusted automation) and main (release source). The GitHub default branch remains
+main; local git-guard hooks do not protect GitHub from direct writes.
 
 Configure `HOMEBREW_TAP_TOKEN` **in this source repository**, scoped only to
 `ylang-ylang/homebrew-tap`, with Contents and Pull requests read/write, Checks and

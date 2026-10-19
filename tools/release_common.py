@@ -44,8 +44,11 @@ class GitHub:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme != "https" or parsed.netloc not in {"api.github.com", "uploads.github.com"}:
             raise ReleaseError("GitHub request must use the fixed HTTPS API/upload host")
+        # Actions archive endpoints accept the JSON API media type and redirect
+        # to ZIP bytes. Only Release asset downloads require octet-stream.
+        release_asset = binary and re.fullmatch(r"/repos/[^/]+/[^/]+/releases/assets/[0-9]+", parsed.path)
         headers = {"Authorization": f"Bearer {self._token}", "X-GitHub-Api-Version": "2022-11-28",
-                   "Accept": "application/octet-stream" if binary else "application/vnd.github+json"}
+                   "Accept": "application/octet-stream" if release_asset else "application/vnd.github+json"}
         if isinstance(data, bytes):
             headers["Content-Type"] = "application/octet-stream"
         elif data is not None:

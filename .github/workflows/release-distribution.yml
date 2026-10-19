@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   distribute:
-    if: github.repository == 'ylang-ylang/gitguard' && (inputs.automation_sha != '' || github.ref == 'refs/heads/main')
+    if: github.repository == 'ylang-ylang/gitguard' && (inputs.automation_sha != '' || github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -53,13 +53,13 @@ jobs:
                            "X-GitHub-Api-Version": "2022-11-28"})
               with urllib.request.urlopen(request, timeout=30) as response:
                   return json.load(response)
-          main = get("/git/ref/heads/main")["object"]["sha"]
-          captured = os.environ.get("AUTOMATION_SHA") or main
+          dev = get("/git/ref/heads/dev")["object"]["sha"]
+          captured = os.environ.get("AUTOMATION_SHA") or dev
           if not re.fullmatch(r"[0-9a-f]{40}", captured):
               raise SystemExit("Invalid automation SHA")
-          compare = get("/compare/" + captured + "..." + main)
+          compare = get("/compare/" + captured + "..." + dev)
           if compare.get("status") not in {"ahead", "identical"}:
-              raise SystemExit("Automation commit is not in source main history")
+              raise SystemExit("Automation commit is not in source dev history")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write("automation_sha=" + captured + "\n")
           PY
