@@ -1,0 +1,77 @@
+name: Release distribution
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      automation_sha:
+        required: true
+        type: string
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact published release tag to retry (Vmajor.minor)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  distribute:
+    if: github.repository == 'ylang-ylang/gitguard' && (inputs.automation_sha != '' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      # Reusable calls already hold the release workflow's global lock.
+      group: ${{ inputs.automation_sha == '' && 'git-guard-release' || format('git-guard-distribution-called-{0}', github.run_id) }}
+      cancel-in-progress: false
+    steps:
+      - name: Capture trusted source automation before executing repository code
+        id: trust
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          AUTOMATION_SHA: ${{ inputs.automation_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+          repo = "ylang-ylang/gitguard"
+          tag = os.environ["RELEASE_TAG"]
+          if not re.fullmatch(r"V(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag):
+              raise SystemExit("Invalid release tag")
+          def get(path):
+              request = urllib.request.Request(
+                  "https://api.github.com/repos/" + repo + path,
+                  headers={"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
+                           "Accept": "application/vnd.github+json",
+                           "X-GitHub-Api-Version": "2022-11-28"})
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+          main = get("/git/ref/heads/main")["object"]["sha"]
+          captured = os.environ.get("AUTOMATION_SHA") or main
+          if not re.fullmatch(r"[0-9a-f]{40}", captured):
+              raise SystemExit("Invalid automation SHA")
+          compare = get("/compare/" + captured + "..." + main)
+          if compare.get("status") not in {"ahead", "identical"}:
+              raise SystemExit("Automation commit is not in source main history")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("automation_sha=" + captured + "\n")
+          PY
+      - name: Checkout captured trusted automation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ylang-ylang/gitguard
+          ref: ${{ steps.trust.outputs.automation_sha }}
+          persist-credentials: false
+      - name: Update only git-guard Formula through checked tap PR
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python3 tools/release_brew.py update-tap --tag "$RELEASE_TAG"

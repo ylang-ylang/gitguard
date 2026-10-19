@@ -1,0 +1,43 @@
+name: Checks
+on:
+  push:
+    branches: ['**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.13'
+      - run: python3 -m pip install build
+      - run: python3 -m unittest discover -s tests -v
+      - run: python3 test_env/run_policy_hook_tests.py --work-root "$RUNNER_TEMP/policy-tests"
+      - name: Build and smoke local candidate (never publishes)
+        run: |
+          python3 tools/build_release.py --repo-root . --out-dir "$RUNNER_TEMP/candidate"
+          VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          python3 tools/smoke_install.py --python python3 --version "$VERSION" --artifact "$RUNNER_TEMP/candidate/git_guard-$VERSION.tar.gz"
+      - uses: Homebrew/actions/setup-homebrew@4790763c0a3ba4036f72634dc079c4a7dfcd4878
+        with:
+          token: ''
+          brew-gh-api-token: ''
+      - name: Install and test real local Homebrew candidate
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          brew tap-new --no-git git-guard/local-validation
+          FORMULA_DIR="$(brew --repository git-guard/local-validation)/Formula"
+          mkdir -p "$FORMULA_DIR"
+          python3 tools/release_brew.py render-local --sdist "$RUNNER_TEMP/candidate/git_guard-$VERSION.tar.gz" --version "$VERSION" --output "$FORMULA_DIR/git-guard.rb"
+          brew install --build-from-source git-guard/local-validation/git-guard
+          brew test git-guard/local-validation/git-guard
+          python3 tools/smoke_install.py --python "$(brew --prefix git-guard)/libexec/bin/python" --version "$VERSION"
+          brew uninstall git-guard
+          brew untap git-guard/local-validation

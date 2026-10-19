@@ -6,7 +6,7 @@ import sys
 import install as install_module
 
 
-__version__ = "0.1.0"
+__version__ = "1.18"
 
 
 def main() -> int:
