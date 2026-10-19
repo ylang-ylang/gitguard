@@ -9,3 +9,4 @@
 - Absorb the current dev integration before completing the draft-release API compatibility repair; preserve the existing V1.18 tag and original artifact anchor.
 - Discover existing drafts through the authenticated release listing when the published-by-tag endpoint returns 404. The trusted metadata-only planner has the permission needed to see drafts; tagged source execution remains isolated with read-only permissions.
 - Compare stable release and asset identities rather than download counters. All 38 package/release regressions pass; a read-only live probe locates the existing V1.18 draft and its original artifact/run anchor without changing it.
+- Absorb current dev and support GitHub's temporary draft browser URLs while verifying draft bytes through immutable asset IDs. Live verification accepts the original draft manifest and still rejects its temporary URL in published mode; all 36 release/tap regressions pass.

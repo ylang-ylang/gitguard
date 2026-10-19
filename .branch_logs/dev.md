@@ -13,3 +13,4 @@
 - Merge feat/homebrew-distribution: packaged policies/runtime, exact-tag release validation, immutable source artifacts and checked Homebrew Formula distribution for 1.18.
 - Merge feat/release-api-fix: repair Actions ZIP media type and Git commit message normalization; capture maintenance automation from dev while keeping V1.18 source pinned to main history.
 - Merge draft-recovery compatibility: find unpublished releases through the draft listing and ignore download counters when comparing identity; retain the original V1.18 artifact.
+- Merge draft asset URL handling: verify unpublished bytes by immutable asset ID, and require canonical V1.18 URLs only after publication.
