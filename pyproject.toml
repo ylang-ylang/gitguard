@@ -1,14 +1,15 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "git-guard"
-version = "0.1.0"
+version = "1.18"
 description = "Generate and enforce Git branch-flow policies from Mermaid gitGraph documents."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "AGPL-3.0-only" }
+license = "AGPL-3.0-only"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
   { name = "git-guard contributors" }
 ]
@@ -23,4 +24,4 @@ py-modules = ["cli", "install", "mermaid"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["runtime"]
+include = ["runtime", "git_guard_assets"]

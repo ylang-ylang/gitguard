@@ -1,0 +1,181 @@
+name: Release
+on:
+  push:
+    tags: ['V*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build, complete, or verify (never creates a tag)
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: git-guard-release
+  cancel-in-progress: false
+jobs:
+  plan:
+    if: github.repository == 'ylang-ylang/gitguard'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      automation_sha: ${{ steps.trusted.outputs.sha }}
+      identity: ${{ steps.plan.outputs.identity }}
+      mode: ${{ steps.plan.outputs.mode }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      commit_sha: ${{ steps.plan.outputs.commit_sha }}
+    steps:
+      # No checkout or repository code runs before the fixed-main resolution.
+      - id: trusted
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+          req = urllib.request.Request('https://api.github.com/repos/ylang-ylang/gitguard/git/ref/heads/main', headers={'Authorization': 'Bearer '+os.environ['GITHUB_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          with urllib.request.urlopen(req, timeout=60) as response:
+              obj = json.load(response)['object']
+          if obj['type'] != 'commit' or not re.fullmatch('[0-9a-f]{40}', obj['sha']):
+              raise SystemExit('fixed main did not resolve to a commit')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('sha='+obj['sha']+'\n')
+          PY
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ylang-ylang/gitguard
+          ref: ${{ steps.trusted.outputs.sha }}
+          persist-credentials: false
+          path: automation
+      - id: plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+        run: python3 automation/tools/release_pipeline.py plan --tag "$RELEASE_TAG" --event "$EVENT_NAME" --event-sha "$EVENT_SHA" --github-output
+  credentials:
+    needs: plan
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      # This job executes no checkout/tagged code and exposes nothing to the build.
+      - name: Require the dedicated tap credential before building or publishing
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::error::Configure HOMEBREW_TAP_TOKEN in ylang-ylang/gitguard, scoped only to ylang-ylang/homebrew-tap. No fallback credentials are used."
+            exit 1
+          fi
+  build:
+    needs: [plan, credentials]
+    if: needs.plan.outputs.mode == 'build'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
+      artifact_sha: ${{ steps.artifact.outputs.artifact-digest }}
+      manifest_sha: ${{ steps.manifest.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ylang-ylang/gitguard
+          ref: ${{ needs.plan.outputs.automation_sha }}
+          persist-credentials: false
+          path: automation
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ylang-ylang/gitguard
+          ref: ${{ needs.plan.outputs.commit_sha }}
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.13'
+      - run: python3 -m pip install build
+      - name: Test exact validated source (read-only job, no tap credential)
+        working-directory: source
+        run: |
+          python3 -m unittest discover -s tests -v
+          python3 test_env/run_policy_hook_tests.py --work-root "$RUNNER_TEMP/policy-tests"
+      - name: Build and smoke actual source archive
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.commit_sha }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          python3 automation/tools/build_release.py --repo-root source --out-dir dist --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT"
+          python3 automation/tools/smoke_install.py --python python3 --version "$RELEASE_VERSION" --artifact "dist/git_guard-$RELEASE_VERSION.tar.gz"
+      - uses: Homebrew/actions/setup-homebrew@4790763c0a3ba4036f72634dc079c4a7dfcd4878
+        with:
+          token: ''
+          brew-gh-api-token: ''
+      - name: Install and test candidate Formula before publication
+        env:
+          RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          brew tap-new --no-git git-guard/local-validation
+          FORMULA_DIR="$(brew --repository git-guard/local-validation)/Formula"
+          mkdir -p "$FORMULA_DIR"
+          python3 automation/tools/release_brew.py render-local --sdist "$PWD/dist/git_guard-$RELEASE_VERSION.tar.gz" --version "$RELEASE_VERSION" --output "$FORMULA_DIR/git-guard.rb"
+          brew install --build-from-source git-guard/local-validation/git-guard
+          brew test git-guard/local-validation/git-guard
+          python3 automation/tools/smoke_install.py --python "$(brew --prefix git-guard)/libexec/bin/python" --version "$RELEASE_VERSION"
+          brew uninstall git-guard
+          brew untap git-guard/local-validation
+      - id: manifest
+        env:
+          RELEASE_IDENTITY: ${{ needs.plan.outputs.identity }}
+        run: |
+          SHA=$(sha256sum dist/release.json | cut -d ' ' -f 1)
+          python3 automation/tools/release_pipeline.py check-bundle --directory dist --identity "$RELEASE_IDENTITY" --manifest-sha "$SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      - id: artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+  publish:
+    needs: [plan, credentials, build]
+    if: always() && !cancelled() && needs.plan.result == 'success' && needs.credentials.result == 'success' && (needs.build.result == 'success' || (needs.plan.outputs.mode == 'retry' && needs.build.result == 'skipped'))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ylang-ylang/gitguard
+          ref: ${{ needs.plan.outputs.automation_sha }}
+          persist-credentials: false
+          path: automation
+      # No tagged code, build hooks, downloaded executables, or tap secret here.
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_IDENTITY: ${{ needs.plan.outputs.identity }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          ARTIFACT_SHA: ${{ needs.build.outputs.artifact_sha }}
+          MANIFEST_SHA: ${{ needs.build.outputs.manifest_sha }}
+        run: |
+          args=()
+          if [ -n "$ARTIFACT_ID" ]; then
+            args+=(--artifact-id "$ARTIFACT_ID" --artifact-sha "$ARTIFACT_SHA" --manifest-sha "$MANIFEST_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT")
+          fi
+          python3 automation/tools/release_pipeline.py publish --identity "$RELEASE_IDENTITY" "${args[@]}"
+  distribution:
+    needs: [plan, publish]
+    if: always() && !cancelled() && needs.plan.result == 'success' && needs.publish.result == 'success'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/release-distribution.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+      automation_sha: ${{ needs.plan.outputs.automation_sha }}
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

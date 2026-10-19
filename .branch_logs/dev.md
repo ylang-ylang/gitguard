@@ -10,3 +10,4 @@
 - Merge feat/remove-runtime-env-bypass to remove user-injectable hook runtime sentinel env variables.
 - merge feat/runtime-hardening: runtime hardening, trigger log, auto-push
 - merge feat/docs-protected-workflow: document protected-branch workflow
+- Merge feat/homebrew-distribution: packaged policies/runtime, exact-tag release validation, immutable source artifacts and checked Homebrew Formula distribution for 1.18.
