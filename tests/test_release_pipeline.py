@@ -73,7 +73,9 @@ class Service:
             text = f'[project]\nversion = "{self.version}"\n' if "/pyproject.toml?" in path else f'__version__ = "{self.version}"\nraise RuntimeError("must not execute")\n'
             return dict(type="file", encoding="base64", content=base64.b64encode(text.encode()).decode())
         if path == f"{PREFIX}/releases/tags/{self.tag}":
-            return copy.deepcopy(self.document)
+            return copy.deepcopy(self.document) if self.document and not self.document["draft"] else None
+        if path.startswith(f"{PREFIX}/releases?"):
+            return [copy.deepcopy(self.document)] if self.document else []
         if path == f"{PREFIX}/actions/artifacts/100":
             return dict(id=100, name="release-assets-200-1", expired=self.expired, workflow_run=dict(id=200))
         if method == "POST" and path == f"{PREFIX}/releases":
@@ -97,7 +99,11 @@ class Service:
         self.downloads.append(path)
         if path == f"{PREFIX}/actions/artifacts/100/zip":
             return self.archive
-        return self.asset_bytes[int(path.rsplit("/", 1)[1])]
+        asset_id = int(path.rsplit("/", 1)[1])
+        for asset in self.document["assets"]:
+            if asset["id"] == asset_id:
+                asset["download_count"] = asset.get("download_count", 0) + 1
+        return self.asset_bytes[asset_id]
 
 
 class ReleaseTests(unittest.TestCase):
@@ -140,6 +146,36 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(plan(service, service.tag, "workflow_dispatch")["mode"], "build")
         publish(service, service.identity, service.anchor)
         self.assertEqual(plan(service, service.tag, "workflow_dispatch")["mode"], "retry")
+
+    def test_draft_lookup_survives_published_endpoint_404(self):
+        service = Service()
+        service.fail_upload = "release.json"
+        with self.assertRaisesRegex(ReleaseError, "interrupted"):
+            publish(service, service.identity, service.anchor)
+        self.assertIsNone(service.request("GET", f"{PREFIX}/releases/tags/{service.tag}"))
+        self.assertEqual(plan(service, service.tag, "workflow_dispatch")["mode"], "retry")
+        service.fail_upload = None
+        self.assertEqual(publish(service, service.identity)["status"], "published")
+        self.assertEqual(service.mutations.count(("POST", f"{PREFIX}/releases")), 1)
+        self.assertTrue(all(asset["download_count"] > 0 for asset in service.document["assets"]))
+
+    def test_duplicate_drafts_fail_closed(self):
+        service = Service()
+        service.fail_upload = "release.json"
+        with self.assertRaises(ReleaseError):
+            publish(service, service.identity, service.anchor)
+        request = service.request
+
+        def duplicates(method, path, *args, **kwargs):
+            if path.startswith(f"{PREFIX}/releases?"):
+                return [copy.deepcopy(service.document), {**copy.deepcopy(service.document), "id": 301}]
+            return request(method, path, *args, **kwargs)
+
+        service.request = duplicates
+        service.mutations.clear()
+        with self.assertRaisesRegex(ReleaseError, "multiple releases"):
+            publish(service, service.identity)
+        self.assertEqual(service.mutations, [])
 
     def test_published_retry_noop_without_retained_artifact(self):
         service = Service()

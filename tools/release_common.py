@@ -135,6 +135,22 @@ def validate_remote_tag(github, tag, expected=None):
 def release_document(github, tag):
     version_for_tag(tag)
     result = github.request("GET", f"{PREFIX}/releases/tags/{tag}", allow_404=True)
+    if result is None:
+        # The by-tag endpoint exposes published releases only. A 404 is not
+        # proof of absence until the authenticated draft listing is complete.
+        matches = []
+        for page in range(1, 101):
+            batch = github.request("GET", f"{PREFIX}/releases?per_page=100&page={page}")
+            if not isinstance(batch, list) or any(not isinstance(item, dict) for item in batch):
+                raise ReleaseError("invalid release listing")
+            matches.extend(item for item in batch if item.get("tag_name") == tag)
+            if len(batch) < 100:
+                break
+        else:
+            raise ReleaseError("release listing exceeds pagination safety bound")
+        if len(matches) > 1:
+            raise ReleaseError("multiple releases share the requested tag; refusing draft adoption")
+        result = matches[0] if matches else None
     if result is not None and (result.get("tag_name") != tag or result.get("prerelease")):
         raise ReleaseError("release tag/prerelease identity mismatch")
     if result is not None and (type(result.get("id")) is not int or result["id"] <= 0 or type(result.get("draft")) is not bool):

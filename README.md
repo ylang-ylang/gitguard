@@ -379,6 +379,11 @@ tags, merges development branches, or updates installed user machines.
   fixed GitHub dev revision before any tagged source runs. This is the release
   controller, not the software being shipped: tags must still resolve to a full
   commit already in remote main history, not necessarily its current tip.
+- The trusted planner has Contents write permission because GitHub hides draft
+  releases from callers without push access, but it performs metadata reads only
+  and executes no tagged source. A published-by-tag 404 is followed by a complete
+  authenticated release listing before declaring absence, so retries find and
+  recover the original draft instead of rebuilding or creating duplicates.
 - A credential-only job checks for the dedicated tap secret without checking out
   or executing source code. A separate `contents: read` job tests, builds and
   executes the verified commit's sdist/wheel and Formula; it has no tap secret.

@@ -17,7 +17,9 @@ jobs:
     if: github.repository == 'ylang-ylang/gitguard'
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      # GitHub hides drafts from callers without push access. This trusted-only
+      # planner executes no tagged source; the separate source build stays read-only.
+      contents: write
     outputs:
       automation_sha: ${{ steps.trusted.outputs.sha }}
       identity: ${{ steps.plan.outputs.identity }}
