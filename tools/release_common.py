@@ -220,7 +220,9 @@ def verify_assets(github, document, manifest, raw, *, complete):
     for asset in assets:
         name = asset["name"]
         url = f"https://github.com/{SOURCE_REPO}/releases/download/{manifest['source']['tag']}/{name}"
-        if asset.get("state") != "uploaded" or asset.get("browser_download_url") != url:
+        # Draft browser URLs use GitHub's temporary untagged-* namespace.
+        # Fetch by authenticated asset ID; require the canonical URL once public.
+        if asset.get("state") != "uploaded" or (not document.get("draft") and asset.get("browser_download_url") != url):
             raise ReleaseError(f"asset state/download URL identity mismatch: {name}")
         digest, size = expected[name]
         data = github.download(f"{PREFIX}/releases/assets/{asset['id']}")

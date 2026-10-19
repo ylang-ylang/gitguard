@@ -88,10 +88,13 @@ class Service:
             asset_id = 400 + len(self.asset_bytes)
             self.asset_bytes[asset_id] = data
             self.document["assets"].append(dict(id=asset_id, name=name, size=len(data), digest="sha256:" + sha256(data),
-                state="uploaded", browser_download_url=f"https://github.com/{SOURCE_REPO}/releases/download/{self.tag}/{name}"))
+                state="uploaded", browser_download_url=f"https://github.com/{SOURCE_REPO}/releases/download/untagged-0123456789abcdef0123/{name}"))
             return copy.deepcopy(self.document["assets"][-1])
         if method == "PATCH" and path == f"{PREFIX}/releases/300":
             self.document.update(data)
+            if not self.document["draft"]:
+                for asset in self.document["assets"]:
+                    asset["browser_download_url"] = f"https://github.com/{SOURCE_REPO}/releases/download/{self.tag}/{asset['name']}"
             return copy.deepcopy(self.document)
         raise AssertionError((method, path))
 

@@ -407,6 +407,10 @@ bound by ID, run/attempt, ZIP digest and manifest digest in its release-note
 anchor; it never rebuilds replacement bytes. Original artifacts are retained for
 90 days; expired or missing recovery artifacts fail visibly. Published retries
 verify original assets without rebuilding, adding, or overwriting them.
+Draft assets are fetched through authenticated immutable asset IDs and checked
+against the original digests. GitHub's temporary `untagged-*` browser URLs are not
+used for download or Formula generation; canonical version-tag URLs are required
+after publication and before distribution.
 
 ```bash
 gh workflow run release.yml --repo ylang-ylang/gitguard --ref dev -f tag=V1.18
