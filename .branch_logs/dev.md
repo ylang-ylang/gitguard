@@ -8,3 +8,6 @@
 - Merge feat/commit-only-runtime-sync to prevent non-commit hooks from writing runtime sync changes.
 - Merge feat/clean-nested-git-env to isolate nested runtime Git commands from parent hook env and run policy tests from linked worktrees.
 - Merge feat/remove-runtime-env-bypass to remove user-injectable hook runtime sentinel env variables.
+- merge feat/runtime-hardening: runtime hardening, trigger log, auto-push
+- merge feat/docs-protected-workflow: document protected-branch workflow
+- Merge feat/homebrew-distribution: packaged policies/runtime, exact-tag release validation, immutable source artifacts and checked Homebrew Formula distribution for 1.18.

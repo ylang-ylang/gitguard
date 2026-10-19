@@ -11,6 +11,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import git_guard_assets
+
 from mermaid import PolicyParseError, load_policy_from_markdown
 
 
@@ -19,6 +21,12 @@ VALID_SCOPES = ("worktree", "local", "global")
 RUNTIME_ENTRYPOINT = "reference_transaction_hook.py"
 INSTALLED_RUNTIME_ENTRYPOINT = "policy_reference_transaction_hook.py"
 DEFAULT_CONFIG = {
+    "auto_push": {
+        "enabled": False,
+        "include_protected": False,
+        "remote": "origin",
+        "timeout_seconds": 15,
+    },
     "branch_logs": {
         "path": ".branch_logs/",
         "force_diff_required": True,
@@ -89,8 +97,18 @@ def main() -> int:
     return run_install_command(repo=args.repo, config=args.config, scope=args.scope, parser=parser)
 
 
+def bundled_config_root() -> Path:
+    packaged = Path(git_guard_assets.__file__).resolve().parent / "configs"
+    if packaged.is_dir():
+        return packaged
+    # Source and editable installs use the same policy documents as the build.
+    if (PROJECT_ROOT / "pyproject.toml").is_file():
+        return PROJECT_ROOT / "configs"
+    return packaged
+
+
 def available_configs_summary() -> str:
-    config_root = PROJECT_ROOT / "configs"
+    config_root = bundled_config_root()
     lines = ["Available bundled configs:"]
 
     if not config_root.exists():
@@ -218,6 +236,13 @@ def install(repo: Path, config: str | Path, scope: str = "local", runner: Path |
         changes,
         ".git-guard/hooks/pre-merge-commit",
         write_text_if_different(pre_merge_commit_path, pre_merge_commit_hook(), mode=0o755),
+    )
+
+    post_commit_path = hook_dir / "post-commit"
+    record_change(
+        changes,
+        ".git-guard/hooks/post-commit",
+        write_text_if_different(post_commit_path, post_commit_hook(), mode=0o755),
     )
 
     enable_path = install_dir / "enable.sh"
@@ -391,12 +416,20 @@ def hook_common_script() -> str:
             '  export GG_STATE_JSON="$resolved_git_dir/git-guard-state.json"',
             '  export GG_LOG_PATH="$resolved_git_dir/git-guard-hook.log"',
             '  GG_RUNTIME="$GG_REPO_ROOT/.git-guard/runtime/policy_reference_transaction_hook.py"',
+            "  GG_PYTHON=",
+            "  for candidate in python3.13 python3 python3.14 python3.12 python3.11; do",
+            '    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c \'import sys; sys.exit(sys.version_info < (3, 11))\' 2>/dev/null; then',
+            '      GG_PYTHON="$candidate"',
+            "      break",
+            "    fi",
+            "  done",
+            '  [ -n "$GG_PYTHON" ] || { printf "%s\\n" "git-guard: Python 3.11 or newer is required on PATH" >&2; exit 1; }',
             "}",
             "",
             "git_guard_exec_runtime() {",
             '  [ -f "$GG_RUNTIME" ] && [ -f "$GG_POLICY_JSON" ] || exit 0',
             "  export PYTHONDONTWRITEBYTECODE=1",
-            '  exec python3 "$GG_RUNTIME" "$@"',
+            '  exec "$GG_PYTHON" "$GG_RUNTIME" "$@"',
             "}",
             "",
             *runtime_sync_shell_function(),
@@ -420,9 +453,9 @@ def runtime_sync_shell_function() -> list[str]:
         '  [ -f "$GG_CONFIG_JSON" ] || return 0',
         '  current_ref="$(git symbolic-ref -q HEAD 2>/dev/null || true)"',
         '  if [ -n "$current_ref" ] && [ -f "$GG_POLICY_JSON" ]; then',
-        "    python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding=\"utf-8\")); protected=data.get(\"protected_refs\", []); sys.exit(0 if sys.argv[2] in protected else 1)' \"$GG_POLICY_JSON\" \"$current_ref\" && return 0",
+        "    \"$GG_PYTHON\" -c 'import json,sys; data=json.load(open(sys.argv[1], encoding=\"utf-8\")); protected=data.get(\"protected_refs\", []); sys.exit(0 if sys.argv[2] in protected else 1)' \"$GG_POLICY_JSON\" \"$current_ref\" && return 0",
         "  fi",
-        "  python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding=\"utf-8\")); runtime=data.get(\"runtime\", {}); value=runtime.get(\"auto_sync\", True) if isinstance(runtime, dict) else True; sys.exit(0 if value is not False else 1)' \"$GG_CONFIG_JSON\" || return 0",
+        "  \"$GG_PYTHON\" -c 'import json,sys; data=json.load(open(sys.argv[1], encoding=\"utf-8\")); runtime=data.get(\"runtime\", {}); value=runtime.get(\"auto_sync\", True) if isinstance(runtime, dict) else True; sys.exit(0 if value is not False else 1)' \"$GG_CONFIG_JSON\" || return 0",
         '  git_guard_command="${GIT_GUARD_BIN:-git-guard}"',
         '  read -r -a git_guard_args <<< "$git_guard_command"',
         '  command -v "${git_guard_args[0]}" >/dev/null 2>&1 || { printf "%s\\n" "git-guard: runtime auto-sync skipped; git-guard command not found" >&2; return 0; }',
@@ -469,7 +502,19 @@ def pre_merge_commit_hook() -> str:
             "#!/usr/bin/env bash",
             "set -eu",
             *source_common_hook_script(),
-            "git_guard_exec_runtime pre-merge-commit",
+            'git_guard_exec_runtime pre-merge-commit',
+            "",
+        ]
+    )
+
+
+def post_commit_hook() -> str:
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -eu",
+            *source_common_hook_script(),
+            'git_guard_exec_runtime post-commit',
             "",
         ]
     )
@@ -532,8 +577,9 @@ def resolve_config(config: str | Path) -> Path:
     if raw.is_absolute() or raw.exists():
         candidates.append(raw)
     else:
-        candidates.append(PROJECT_ROOT / "configs" / str(config))
-        candidates.append(PROJECT_ROOT / str(config))
+        candidates.append(bundled_config_root() / str(config))
+        if (PROJECT_ROOT / "pyproject.toml").is_file():
+            candidates.append(PROJECT_ROOT / str(config))
 
     for candidate in candidates:
         candidate = candidate.resolve()

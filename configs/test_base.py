@@ -63,7 +63,11 @@ class PolicyHookTestBase:
         self.run_rejection_tests()
         self.checkout_final_branch()
         self.assert_submodule_main_guard()
+        self.assert_nested_submodule_policy_hook()
+        self.assert_ref_deletion_guards()
         self.assert_linked_worktree_branch_creation_guard()
+        self.assert_auto_push_post_commit()
+        self.assert_hook_trigger_log()
 
         print(f"PASS {self.name}: policy hook test repo is {self.repo}")
         print(f"{self.name}: {FINISH_SYMBOL}")
@@ -126,6 +130,7 @@ class PolicyHookTestBase:
             self.repo / ".git-guard" / "hooks" / "pre-push",
             self.repo / ".git-guard" / "hooks" / "pre-commit",
             self.repo / ".git-guard" / "hooks" / "pre-merge-commit",
+            self.repo / ".git-guard" / "hooks" / "post-commit",
             self.repo / ".git-guard" / "runtime" / "policy_reference_transaction_hook.py",
         ]
         expected_files.extend(
@@ -174,7 +179,7 @@ class PolicyHookTestBase:
             raise AssertionError(f"{self.name}: common hook helper should not expose runtime sync env bypass")
         if "PYTHONDONTWRITEBYTECODE=1" not in common_hook_text:
             raise AssertionError(f"{self.name}: common hook helper should prevent runtime bytecode caches")
-        for hook_name in ["reference-transaction", "pre-push", "pre-commit", "pre-merge-commit"]:
+        for hook_name in ["reference-transaction", "pre-push", "pre-commit", "pre-merge-commit", "post-commit"]:
             hook_text = (self.repo / ".git-guard" / "hooks" / hook_name).read_text(encoding="utf-8")
             if ". \"$hook_dir/common.sh\"" not in hook_text:
                 raise AssertionError(f"{self.name}: {hook_name} hook should source common hook helper")
@@ -838,6 +843,231 @@ class PolicyHookTestBase:
             "SUBMODULE_REPO_MISSING",
             cleanup=lambda: self.reset_parent_and_init_submodule(allowed_parent),
         )
+
+    def assert_nested_submodule_policy_hook(self) -> None:
+        submodule = self.repo / "modules" / "lib"
+        if not submodule.exists():
+            raise AssertionError(f"{self.name}: nested policy test requires initialized submodule: {submodule}")
+
+        nested_policy_path = self.work_root.parent / f"{self.name}-nested-contribution.md"
+        nested_policy_path.write_text(
+            "\n".join(
+                [
+                    "# Nested Submodule Policy",
+                    "",
+                    "```mermaid",
+                    "gitGraph TB:",
+                    '    commit id:"init"',
+                    "    branch dev",
+                    "    checkout dev",
+                    '    commit id:"dev work"',
+                    "    checkout main",
+                    '    merge dev id:"dev to main"',
+                    "```",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        install_policy_hook(submodule, nested_policy_path, scope="local")
+
+        if not (submodule / ".git-guard" / "policy.json").exists():
+            raise AssertionError(f"{self.name}: nested submodule install should write .git-guard/policy.json")
+        nested_policy = json.loads((submodule / ".git-guard" / "policy.json").read_text(encoding="utf-8"))
+        if nested_policy.get("protected_refs") != ["refs/heads/main"]:
+            raise AssertionError(f"{self.name}: nested submodule policy should protect only refs/heads/main")
+        hook_path = self.git_in(submodule, "config", "--local", "--get", "core.hooksPath").stdout.strip()
+        if hook_path != ".git-guard/hooks":
+            raise AssertionError(f"{self.name}: nested submodule install should set local core.hooksPath, got {hook_path!r}")
+
+        submodule_git_dir = Path(
+            self.git_in(submodule, "rev-parse", "--path-format=absolute", "--git-dir").stdout.strip()
+        ).resolve()
+        nested_state_path = Path(
+            self.git_in(submodule, "rev-parse", "--path-format=absolute", "--git-path", "git-guard-state.json").stdout.strip()
+        ).resolve()
+        if nested_state_path.parent != submodule_git_dir:
+            raise AssertionError(
+                f"{self.name}: nested submodule state should live in the submodule git dir {submodule_git_dir}, "
+                f"got {nested_state_path}"
+            )
+
+        result = self.git_in(submodule, "branch", "random/topic", check=False)
+        self.assert_output_contains(result, "BRANCH_NAME_NOT_ALLOWED")
+        self.assert_output_contains(result, f"see policy: {(submodule / '.git-guard' / 'contribution.md').resolve()}")
+        if ref_exists(submodule, "refs/heads/random/topic"):
+            raise AssertionError(f"{self.name}: nested policy allowed branch creation outside its branch set")
+
+        self.git_in(submodule, "checkout", "-b", "dev", "main")
+
+        self.write_repo_file(submodule, "nested.txt", "nested work\n")
+        self.git_in(submodule, "add", "nested.txt")
+        result = self.git_in(submodule, "commit", "-m", "nested dev work without branch log", check=False)
+        self.assert_output_contains(result, "BRANCH_LOG_CHANGE_REQUIRED")
+
+        self.write_repo_file(submodule, ".branch_logs/dev.md", f"{self.branch_log_template('dev')}- nested dev entry\n")
+        self.git_in(submodule, "add", ".branch_logs/dev.md")
+        self.git_in(submodule, "commit", "-m", "nested dev work")
+
+        if not nested_state_path.exists():
+            raise AssertionError(f"{self.name}: nested submodule hook should write state file: {nested_state_path}")
+        nested_state = json.loads(nested_state_path.read_text(encoding="utf-8"))
+        if "refs/heads/dev" not in nested_state.get("branch_bases", {}):
+            raise AssertionError(f"{self.name}: nested submodule state should record the dev branch base")
+
+        main_before = self.git_in(submodule, "rev-parse", "--verify", "main").stdout.strip()
+        self.git_in(submodule, "checkout", "main")
+        self.write_repo_file(submodule, "main-direct.txt", "direct main work\n")
+        self.git_in(submodule, "add", "main-direct.txt")
+        self.write_repo_file(submodule, ".branch_logs/main.md", f"{self.branch_log_template('main')}- direct main entry\n")
+        self.git_in(submodule, "add", ".branch_logs/main.md")
+        result = self.git_in(submodule, "commit", "-m", "direct main commit rejected by nested policy", check=False)
+        self.assert_output_contains(result, "PROTECTED_REF_NO_ALLOWED_SOURCE")
+        main_after = self.git_in(submodule, "rev-parse", "--verify", "main").stdout.strip()
+        if main_after != main_before:
+            raise AssertionError(f"{self.name}: nested policy protected main moved after rejection")
+
+        gitlink_sha = self.git("rev-parse", "--verify", "HEAD:modules/lib").stdout.strip()
+        self.git_in(submodule, "reset", "--hard", "main")
+        self.git_in(submodule, "checkout", "--detach", gitlink_sha)
+
+        self.write_file("nested-cross-layer.txt", "parent commit with nested submodule hooks\n")
+        self.git("add", "nested-cross-layer.txt")
+        self.ensure_current_branch_log_staged()
+        result = self.git("commit", "-m", "parent commit with nested submodule hooks")
+        self.assert_output_contains(result, "SUBMODULE_NOT_ON_ALLOWED_REMOTE_BRANCH_BUT_ON_LOCAL_BRANCH")
+
+    def assert_ref_deletion_guards(self) -> None:
+        current = self.git_no_hooks("branch", "--show-current").stdout.strip()
+        protected = [
+            ref
+            for ref in self.policy.get("protected_refs", [])
+            if ref != f"refs/heads/{current}" and ref_exists(self.repo, ref)
+        ]
+        if protected:
+            branch = protected[0].removeprefix("refs/heads/")
+            self.expect_rejected(["branch", "-D", branch], "PROTECTED_REF_DELETE")
+
+        tag_rules = self.policy.get("tag_rules", [])
+        if tag_rules:
+            for tag_ref in self.git("for-each-ref", "--format=%(refname)", "refs/tags").stdout.splitlines():
+                if any(re.match(rule["tag_ref_regex"], tag_ref) for rule in tag_rules):
+                    self.expect_rejected(["tag", "-d", tag_ref.removeprefix("refs/tags/")], "TAG_DELETE_NOT_ALLOWED")
+                    break
+
+        self.git_no_hooks("tag", "outside-policy-tag", "HEAD")
+        self.git("tag", "-d", "outside-policy-tag")
+
+        self.expect_rejected(
+            ["symbolic-ref", "HEAD", "refs/heads/wrong/symref-target"],
+            "BRANCH_NAME_NOT_ALLOWED",
+        )
+
+    def set_auto_push(self, enabled: bool, include_protected: bool | None = None, remote: str | None = None) -> None:
+        config_path = self.repo / ".git-guard" / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        section = config.setdefault("auto_push", {})
+        section["enabled"] = enabled
+        if include_protected is not None:
+            section["include_protected"] = include_protected
+        if remote is not None:
+            section["remote"] = remote
+        config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def auto_push_open_branch(self) -> str | None:
+        protected = set(self.policy.get("protected_refs", []))
+        for item in self.policy.get("direct_commit_refs", []):
+            name = item["name"]
+            if f"refs/heads/{name}" in protected:
+                continue
+            if "*" not in name:
+                return name
+            edge = next((entry for entry in self.policy.get("branch_from", []) if entry.get("target") == name), None)
+            if not edge:
+                continue
+            candidate = name.replace("*", "auto-push")
+            if not ref_exists(self.repo, f"refs/heads/{candidate}"):
+                self.create_branch(candidate, edge["source"])
+            return candidate
+        return None
+
+    def assert_auto_push_post_commit(self) -> None:
+        open_branch = self.auto_push_open_branch()
+        if open_branch is None:
+            return
+        protected_branch = sorted(self.policy.get("protected_refs", []))[0].removeprefix("refs/heads/")
+
+        remote = self.work_root.parent / f"{self.name}-auto-push-remote.git"
+        if remote.exists():
+            shutil.rmtree(remote)
+        run_raw(self.work_root.parent, ["git", "init", "--bare", str(remote)])
+        self.git_no_hooks("remote", "remove", "autopush", check=False)
+        self.git("remote", "add", "autopush", str(remote))
+
+        def remote_tip(branch: str) -> str | None:
+            result = git_raw(remote, "rev-parse", "--verify", f"refs/heads/{branch}", check=False)
+            return result.stdout.strip() if result.returncode == 0 else None
+
+        self.git("checkout", open_branch)
+
+        # Default config keeps auto-push disabled.
+        self.run_command([".git-guard/hooks/post-commit"])
+        if remote_tip(open_branch) is not None:
+            raise AssertionError(f"{self.name}: auto-push ran with default disabled config")
+
+        # Enabled: pushes the current branch tip and sets upstream.
+        self.set_auto_push(True, remote="autopush")
+        result = self.run_command([".git-guard/hooks/post-commit"])
+        self.assert_output_contains(result, f"auto-pushed refs/heads/{open_branch}")
+        if remote_tip(open_branch) != self.rev_parse(open_branch):
+            raise AssertionError(f"{self.name}: auto-push did not publish {open_branch} tip")
+
+        # Up-to-date upstream skips the push silently.
+        result = self.run_command([".git-guard/hooks/post-commit"])
+        self.assert_output_not_contains(result, "auto-pushed")
+
+        # Protected branches are skipped unless include_protected is enabled.
+        self.git("checkout", protected_branch)
+        result = self.run_command([".git-guard/hooks/post-commit"])
+        self.assert_output_not_contains(result, f"auto-pushed refs/heads/{protected_branch}")
+        if remote_tip(protected_branch) is not None:
+            raise AssertionError(f"{self.name}: auto-push published protected branch without include_protected")
+
+        self.set_auto_push(True, include_protected=True, remote="autopush")
+        result = self.run_command([".git-guard/hooks/post-commit"])
+        self.assert_output_contains(result, f"auto-pushed refs/heads/{protected_branch}")
+        if remote_tip(protected_branch) != self.rev_parse(protected_branch):
+            raise AssertionError(f"{self.name}: auto-push did not publish protected branch {protected_branch}")
+
+        # Push failures warn but never fail the commit. Point the remote at a
+        # missing path before committing; the post-commit auto-push attempt then
+        # fails while the commit itself succeeds.
+        self.git("checkout", open_branch)
+        self.git("remote", "set-url", "autopush", str(self.work_root.parent / "missing-auto-push-remote.git"))
+        self.write_file("auto-push-failure.txt", "auto push failure\n")
+        self.git("add", "auto-push-failure.txt")
+        self.ensure_current_branch_log_staged()
+        result = self.git("commit", "-m", "auto push failure probe")
+        self.assert_output_contains(result, "AUTO_PUSH_FAILED")
+
+        self.set_auto_push(False, include_protected=False)
+        self.git_no_hooks("remote", "remove", "autopush", check=False)
+
+    def assert_hook_trigger_log(self) -> None:
+        raw = self.git_no_hooks("rev-parse", "--path-format=absolute", "--git-path", "git-guard-hook.log").stdout.strip()
+        log_path = Path(raw)
+        if not log_path.exists():
+            raise AssertionError(f"{self.name}: hook trigger log is missing: {log_path}")
+        text = log_path.read_text(encoding="utf-8")
+        for expected in [
+            "hook=pre-commit",
+            "hook=prepared result=ok",
+            "hook=post-commit result=ok",
+            "result=rejected code=",
+        ]:
+            if expected not in text:
+                raise AssertionError(f"{self.name}: hook trigger log should contain {expected!r}\nlog:\n{text[-2000:]}")
 
     def prepare_submodule_main_guard_branch(self) -> str:
         preferred_names = ["feat/*", "infra/*", "release/*", "hotfix/*"]

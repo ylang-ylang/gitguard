@@ -6,6 +6,41 @@ It is intended for repositories that want branch-flow rules to be written once i
 
 ## Run
 
+### Homebrew (Linux x86_64)
+
+The Homebrew distribution uses the shared `ylang-ylang/tap` tap. The first
+installation becomes available after a version-consistent release and its
+checked Formula PR have been published; local candidate builds are not releases.
+
+```bash
+brew install ylang-ylang/tap/git-guard
+git-guard --version
+brew update
+brew upgrade ylang-ylang/tap/git-guard
+brew reinstall ylang-ylang/tap/git-guard
+brew uninstall git-guard
+```
+
+The Formula installs the published setuptools source distribution into its own
+`libexec` virtualenv. Build dependency: `python-setuptools`. Runtime dependencies:
+Python 3.13, Git and Bash. It neither modifies system Python nor starts a service.
+The first Brew support target is Linux x86_64; other operating systems and CPU
+architectures are explicitly refused, not claimed as tested.
+
+Installation, upgrade and removal affect only the package. They never enable
+hooks in arbitrary repositories or remove `.git-guard/`, `.branch_logs/`, Git
+history, hook state or logs. Activate a chosen repository explicitly with
+`git-guard install --repo ... --config ...`. Existing repositories keep their
+copied runtime until their configured pre-commit auto-sync or an explicit install
+refreshes it; perform checked-in runtime updates on a maintenance branch.
+
+For an existing uv/editable installation, inspect `command -v git-guard` before
+switching: `~/.local/bin` may shadow Brew's command. Brew does not remove that
+launcher or uninstall another package manager's environment. Retire the old uv
+tool explicitly only when you choose to switch; repository data remains intact.
+
+### Running from a checkout
+
 The default workflow does not require installing into Python at all:
 
 ```bash
@@ -54,6 +89,13 @@ configs/<name>/
 ```
 
 `contribution.md` is the source of truth. It contains one supported Mermaid `gitGraph` block.
+
+Wheel and source-distribution installs include all four bundled policy documents
+and the complete hook runtime. `setup.py` stages policies from the canonical
+`configs/*/contribution.md` files into `git_guard_assets`; no duplicate editable
+policy sources are maintained. Installed commands work outside the source tree.
+Copied hooks locate Python 3.11 or newer on `PATH` (preferring `python3.13`) rather
+than embedding a version-specific Cellar path.
 
 `policy.json` is generated during installation and copied into the target repository under `.git-guard/`. The hook runtime reads this file directly.
 
@@ -111,6 +153,16 @@ v#.#.0
 v=.=.#
 ```
 
+## Workflow
+
+Protected branches such as `dev` and `main` are integration-only. Do not develop on their checkouts.
+
+- Create a working branch (`feat/*`, `case/*/*`, ...) **before editing anything**, and create it from the **main worktree**. Linked worktrees reject branch creation with `WORKTREE_BRANCH_CREATION_NOT_ALLOWED`; run `git worktree add <path> -b <name>` from the main worktree so each branch gets its own directory.
+- Keep protected-branch checkouts for integration merges and read-only verification only.
+- An editable-install checkout (uv tool / pip `-e`) is not a workspace: it is only the path the `git-guard` command reads. Develop on a feature branch; if the command should track a different checkout, reinstall the editable tool from there.
+- Merge back through the declared flow: sync the target into your branch when the graph requires it, then merge. Delete merged branches from the main worktree.
+- If a repository's own installed hook rejects legitimate operations because the checked-out runtime is older than the local Git (for example `HOOK_UNSUPPORTED_PHASE` on newer Git), refresh it with `git-guard install --repo <repo> --config <repo>/.git-guard/contribution.md` from a checkout whose policy allows the operation, and restore the worktree afterwards.
+
 ## Install Hook
 
 Install one config into a target repository:
@@ -150,6 +202,7 @@ It copies the packaged runtime hook into the target repo:
 <repo>/.git-guard/enable.sh
 <repo>/.git-guard/hooks/pre-commit
 <repo>/.git-guard/hooks/pre-merge-commit
+<repo>/.git-guard/hooks/post-commit
 <repo>/.git-guard/hooks/pre-push
 <repo>/.git-guard/hooks/reference-transaction
 <repo>/.git-guard/policy.json
@@ -197,6 +250,12 @@ git-guard: agent guidance: if you are an agent, read the contribution document a
 
 ```json
 {
+  "auto_push": {
+    "enabled": false,
+    "include_protected": false,
+    "remote": "origin",
+    "timeout_seconds": 15
+  },
   "branch_logs": {
     "path": ".branch_logs/",
     "force_required": true
@@ -252,6 +311,8 @@ This guard only covers branch creation because it is enforced by the `reference-
 
 Before any push, the installed `pre-push` hook checks local tags that satisfy the configured release tag rules. If `.git-guard/config.json` keeps `pre_push.auto_push_missing_tags` enabled and a matching local release tag is missing from the target remote, the hook prints a visible `auto-pushing missing release tags` message and pushes that tag first. If the remote already has the same tag name pointing at a different object, the push is rejected with `PUSH_TAG_CONFLICT`.
 
+If `.git-guard/config.json` enables `auto_push.enabled`, the installed `post-commit` hook pushes the current branch tip to `auto_push.remote` after every ordinary or merge commit. This is a publication convenience layer, not a policy mechanism: it is disabled by default, it never blocks or fails the commit, and it prints a visible `auto-pushed <ref> -> <remote>` line on success or an `AUTO_PUSH_FAILED` warning on failure (no retries; the next commit pushes again). Pushes go through the normal `pre-push` hook, so release tag checks and auto-push apply as usual. Branches in `protected_refs` are skipped unless `auto_push.include_protected` is enabled. When the branch upstream is already up to date, the push is skipped without network access. `auto_push.timeout_seconds` bounds the network wait.
+
 If `.git-guard/config.json` keeps the boolean `submodules.main_guard` enabled, every local branch ref update checks all submodule gitlinks in the target commit. `submodules.allowed_branches` lists branch names or branch patterns, such as `["main", "case/*/*"]`, that may contain a submodule gitlink commit. The default is `["main", "case/*/*"]`.
 
 A gitlink that equals a matching local `refs/remotes/origin/<branch>` tip is accepted silently. A gitlink behind a matching remote-tracking branch is accepted with a visible warning. A gitlink only reachable from a matching local `refs/heads/<branch>` is accepted with a visible warning because it is on an allowed branch name but is not known to be on `origin`. A gitlink that is not reachable from any configured branch is rejected with `SUBMODULE_COMMIT_NOT_ALLOWED`. Missing submodule worktrees, missing submodule commits, or missing all configured branch refs are rejected because Git Guard cannot verify the submodule state.
@@ -269,7 +330,134 @@ Runtime state is stored in the target repo's Git directory:
 <repo>/.git/git-guard-hook.log
 ```
 
+`git-guard-hook.log` records every hook trigger: one line per reference-transaction ref update (`phase old new ref`) and one timestamped line per hook invocation (`<iso-time> hook=<name> result=ok|rejected [code=...]`), covering `prepared`/`preparing`, `committed`, `aborted`, `pre-commit`, `pre-merge-commit`, `post-commit`, and `pre-push`. The log lives inside the Git directory, so it is never tracked by Git and needs no `.gitignore` entry; logging failures never affect the hooks.
+
 Because the hook path is repo-relative, a repo generated or installed in Docker can still run from the host without referencing container-only paths.
+
+## Git Version Compatibility
+
+The minimum supported Git version is 2.31 (`git rev-parse --path-format`). The runtime is tested against Git 2.47 and 2.55.
+
+The `reference-transaction` hook payload differs across Git versions, and Git Guard handles both observed behaviors without version-string checks:
+
+- Branch renames never report the new ref to the hook. Git Guard validates rename targets by inspecting the parent `git` process command line, and additionally validates `HEAD` symref updates that point at not-yet-existing branches. A rename to a policy-foreign name is rejected with `BRANCH_NAME_NOT_ALLOWED` whether the renamed branch is checked out or not. If the parent command line is unobservable (non-Linux without `/proc` or `ps`), a rename of a non-current branch cannot be distinguished from a plain deletion and is allowed; renames of the current branch are still caught through the `HEAD` symref update.
+- Some Git versions report ref deletions without the old object value. Protected branch deletions and policy tag deletions are nevertheless rejected (`PROTECTED_REF_DELETE`, `TAG_DELETE_NOT_ALLOWED`). Deleting branches outside the policy namespace and tags that match no policy tag rule remains allowed, so pre-policy or accidental refs can be cleaned up.
+- Git 2.46 and later emit an additional `preparing` phase before `prepared`; both are validated identically.
+- Tag ref transactions report the tag object ID, and during the reference-transaction quarantine the receiving ref does not exist yet. Git Guard peels annotated tag objects to their target commit via `cat-file` before applying tag rules, so both lightweight and annotated release tags are accepted, and creating a matching annotated tag clears the pending tag requirement.
+
+## Release distribution
+
+The canonical GitHub repository is `ylang-ylang/gitguard`. In the maintainer
+checkout its remote is **`upstream-github`**, not `origin` (the latter points at
+an internal Git server). Actions always address the fixed GitHub repository.
+
+### Versions and maintainer responsibilities
+
+The existing contribution policy remains `feat/* -> dev -> main`, with
+`V<major>.<minor>` release tags. Package version `1.18` corresponds exactly to
+`V1.18`, not `1.18.0`. Both `pyproject.toml` and the literal `src/cli.py`
+`__version__` must agree before a maintainer tags the formal main integration.
+The release guard reads these as TOML/AST data; it never imports tagged Python
+code to discover its version.
+
+Historical tags through the locally existing `V1.17` carried package version
+`0.1.0`. They remain untouched. They are intentionally not republished under a
+fabricated version mapping; version-mismatched historical tags fail the new gate.
+No compatibility tags are created and no old assets are replaced.
+
+Prepare version changes on a permitted maintenance branch, integrate through the
+actual policy, then push the reviewed main integration and its existing tag to
+`upstream-github`. CI never chooses a version, edits version files, creates/moves
+tags, merges development branches, or updates installed user machines.
+
+### Workflow and immutable artifacts
+
+- `.github/workflows/check.yml`: ordinary branch/PR checks only, including real
+  packaged CLI/hooks and a local-candidate Brew install/test.
+- `release.yml`: automatic entry is a version-tag push; `workflow_dispatch`
+  retries an explicit existing tag. Trusted automation is captured from the
+  fixed GitHub main revision before any tagged source runs. Tags must resolve to
+  a full commit already in remote main history, not necessarily its current tip.
+- A credential-only job checks for the dedicated tap secret without checking out
+  or executing source code. A separate `contents: read` job tests, builds and
+  executes the verified commit's sdist/wheel and Formula; it has no tap secret.
+- The `contents: write` publisher executes only the captured trusted automation.
+  It rechecks tag identity, creates a draft, uploads verified assets, verifies the
+  complete set, then publishes. Tag-object/commit drift is a hard failure.
+- `release-distribution.yml` uses the same trusted revision and a separate,
+  dedicated tap token. It creates/reuses an owned Formula-only PR, verifies its
+  complete diff and exact head SHA, requires an explicitly successful
+  `tap-checks`, rechecks release identity, and only then merges the PR.
+
+Each release contains `git_guard-<version>.tar.gz` (the Formula source),
+`git_guard-<version>-py3-none-any.whl`, `release.json`, and `SHA256SUMS`.
+The manifest binds repository/tag/exact source commit and the two independent
+asset digests and sizes. The Formula SHA-256 is the **sdist** digest, never the
+wheel, manifest, or GitHub source-archive digest.
+
+Retries inspect actual release state. With no Release, an explicit validated
+tag can be built. An unfinished draft recovers the original Actions artifact
+bound by ID, run/attempt, ZIP digest and manifest digest in its release-note
+anchor; it never rebuilds replacement bytes. Original artifacts are retained for
+90 days; expired or missing recovery artifacts fail visibly. Published retries
+verify original assets without rebuilding, adding, or overwriting them.
+
+```bash
+gh workflow run release.yml --repo ylang-ylang/gitguard --ref main -f tag=V1.18
+# Retry only Brew distribution for an already complete published release:
+gh workflow run release-distribution.yml --repo ylang-ylang/gitguard --ref main -f tag=V1.18
+```
+
+Use the tag actually prepared by the maintainer, not a branch name or a free-form
+source SHA. A successful rerun of an already shipped Formula is a no-op; a
+downgrade, foreign PR, missing/red check, or replaced release asset is refused.
+
+### One-time deployment prerequisites
+
+Integrate the automation through the normal branch flow before the first tag
+push. The canonical GitHub default branch is `main`; restrict review/write
+access to this trusted automation boundary. Local git-guard hooks do not protect
+GitHub from direct writes.
+
+Configure `HOMEBREW_TAP_TOKEN` **in this source repository**, scoped only to
+`ylang-ylang/homebrew-tap`, with Contents and Pull requests read/write, Checks and
+Commit statuses read, and GitHub's required Metadata read. Existing Portmap
+repository secrets are not shared or exported. Missing credentials fail before
+building/publishing; there is no source-token or personal-token fallback.
+
+The one-time shared tap CI extension was merged separately in
+[homebrew-tap PR #3](https://github.com/ylang-ylang/homebrew-tap/pull/3), after
+`tap-checks` passed. It retains that check name, its Linux runner and all existing
+Portmap tests, adds syntax checks for every Formula and Git Guard-only
+install/test/reinstall checks, and increases the timeout to 20 minutes.
+`Formula/portmap.rb` and other projects were not changed. Routine distribution
+PRs must change exactly `Formula/git-guard.rb`; they never modify tap CI.
+Editing the workflow for bootstrap required temporary Workflows read/write
+permission. Triggering its existing checks for routine Formula PRs does not;
+the extra permission can now be removed.
+
+### Local verification without publishing
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install build
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python tools/build_release.py --out-dir .tmp/candidate
+.venv/bin/python tools/smoke_install.py --python .venv/bin/python \
+  --version 1.18 --artifact .tmp/candidate/git_guard-1.18.tar.gz
+```
+
+Candidate manifests explicitly contain `candidate: true` and no release
+tag/commit/URLs. `tools/release_brew.py render-local` hashes the real candidate
+sdist and emits a clearly marked local-only Formula for a temporary validation
+tap; it cannot be used by production distribution. Release builds require paired
+`--tag`/`--commit`, matching static versions and exact clean source HEAD.
+
+The offline release/tap tests exercise immutable draft recovery, published
+no-op retry, tag/version/byte drift, non-main tags, missing credentials, red or
+missing checks, concurrent PR edits, and preservation of other tap Formulae.
+They do not claim a live GitHub publication; that requires the prerequisites
+above.
 
 ## Test
 
@@ -283,9 +471,11 @@ Run integration tests in Docker:
 
 ```bash
 mkdir -p .tmp
-docker compose run --rm policy-hook-tests
+docker compose run --rm -T policy-hook-tests < /dev/null
 docker compose down
 ```
+
+Closing stdin is required: one test drives the `pre-push` hook directly, and the hook reads ref updates from stdin until EOF. An interactively proxied compose stdin never reaches EOF and the test would block.
 
 The integration test runner creates one isolated test repo per config:
 

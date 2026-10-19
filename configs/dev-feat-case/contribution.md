@@ -51,3 +51,7 @@ gitGraph TB:
 - `main` release merge results must use a `V#.#` tag, where `#` means one or more decimal digits.
 - `main` must not receive direct commits.
 - Ad hoc tags are not allowed; release tags are allowed only when they satisfy the `dev` to `main` rule.
+
+## Workflow
+
+`main` and `dev` are integration-only. Create short-lived `feat/*` or `case/*/*` branches before editing — always from the main worktree, because linked worktrees cannot create branches — and merge back through the declared flow. Never develop directly on a protected-branch checkout.

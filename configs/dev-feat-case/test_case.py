@@ -4,7 +4,7 @@ import json
 import shutil
 from typing import Any
 
-from configs.test_base import PolicyHookTestBase, run_raw
+from configs.test_base import PolicyHookTestBase, ref_exists, run_raw
 
 
 START_SYMBOL = "=========== GIT GUARD REJECTION TESTS START ==========="
@@ -51,6 +51,7 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.expect_rejected(["branch", "wrong/test", "dev"], "BRANCH_NAME_NOT_ALLOWED")
         self.expect_rejected(["branch", "release/demo", "dev"], "BRANCH_NAME_NOT_ALLOWED")
         self.expect_illegal_branch_rename_rejected()
+        self.assert_same_sha_tie_merge_allowed()
 
         self.git("checkout", "dev")
         self.expect_merge_rejected("case/dev-context/reject-to-dev", "PROTECTED_REF_NO_ALLOWED_SOURCE")
@@ -86,10 +87,60 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.assert_pending_tag_count(1)
         self.tag("V1.1", self.pending_main_sha)
         self.assert_pending_tag_count(0)
+        self.assert_annotated_release_tag_flow()
         self.assert_pre_push_auto_syncs_release_tags()
         self.assert_pre_push_auto_sync_can_be_disabled()
         self.assert_branch_log_pre_commit_guards()
         self.assert_per_branch_log_merge_guards()
+
+    def assert_same_sha_tie_merge_allowed(self) -> None:
+        # A rule-less feat/* branch that shares dev's current SHA must not poison a
+        # dev -> feat/* merge: introduced heads are grouped by SHA, and a group is
+        # accepted when any ref in it matches a merge rule for the update target.
+        tie_idle = "feat/tie-idle"
+        tie_work = "feat/tie-work"
+        self.create_branch(tie_idle, "dev")
+        self.create_branch(tie_work, "dev")
+        tie_work_old = self.commit_file(tie_work, "tie-work.txt", "tie work\n", "tie work commit")
+
+        advance = "feat/tie-advance"
+        self.create_branch(advance, "dev")
+        self.commit_file(advance, "tie-advance.txt", "tie advance\n", "advance dev through feature")
+        self.merge_to(advance, "dev")
+        self.git("branch", "-D", advance)
+        dev_tip = self.rev_parse("dev")
+
+        # Re-point the idle branch so it shares dev's CURRENT sha: branch creation
+        # requires the exact dev tip, so delete and recreate it.
+        self.git("branch", "-D", tie_idle)
+        self.create_branch(tie_idle, "dev")
+        if self.rev_parse(tie_idle) != dev_tip:
+            raise AssertionError(f"{self.name}: feat/tie-idle should share dev's current tip {dev_tip}")
+
+        # Merging dev into feat/tie-work must succeed even though feat/tie-idle is
+        # an idle rule-less branch tied at dev's exact SHA.
+        self.merge_to("dev", tie_work)
+        merge_sha = self.rev_parse(tie_work)
+        if merge_sha == tie_work_old:
+            raise AssertionError(f"{self.name}: dev -> {tie_work} merge did not create a merge commit")
+        parents = self.git("rev-list", "--parents", "-n", "1", tie_work).stdout.split()
+        if len(parents) != 3:
+            raise AssertionError(f"{self.name}: expected a two-parent merge commit, got {parents}")
+        self.assert_is_ancestor(dev_tip, tie_work)
+
+        # A rule-less feat/* branch with a unique commit must still be rejected when
+        # merged into another feat/* branch (no feat/* -> feat/* rule exists).
+        no_rule = "feat/no-rule"
+        self.create_branch(no_rule, "dev")
+        self.commit_file(no_rule, "no-rule.txt", "no rule work\n", "no rule feature commit")
+        self.git("checkout", tie_work)
+        result = self.expect_merge_rejected(no_rule, "MANAGED_BRANCH_SOURCE_NOT_ALLOWED")
+        combined = result.stdout + result.stderr
+        if f"source_refs=refs/heads/{no_rule}" not in combined:
+            raise AssertionError(
+                f"{self.name}: expected rejection to list source_refs=refs/heads/{no_rule}\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
 
     def checkout_final_branch(self) -> None:
         self.git("checkout", "dev")
@@ -98,6 +149,17 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         branch = "feat/rename-guard"
         self.create_branch(branch, "dev")
         self.expect_rejected(["branch", "-m", branch, "wrong/renamed"], "BRANCH_NAME_NOT_ALLOWED")
+
+        self.git("checkout", "dev")
+        self.expect_rejected(["branch", "-m", branch, "wrong/renamed-noncurrent"], "BRANCH_NAME_NOT_ALLOWED")
+
+        self.git("branch", "-m", branch, "feat/renamed-ok")
+        if not ref_exists(self.repo, "refs/heads/feat/renamed-ok"):
+            raise AssertionError(f"{self.name}: rename to a policy-allowed name was rejected")
+        self.git("branch", "-D", "feat/renamed-ok")
+
+        self.git_no_hooks("branch", "wrong/legacy", "dev")
+        self.git("branch", "-D", "wrong/legacy")
 
     def create_feature_release(self) -> None:
         main_case_branch = "case/main-context/bootstrap"
@@ -180,6 +242,23 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         pending_tags = self.state().get("pending_tags", {})
         if len(pending_tags) != expected:
             raise AssertionError(f"{self.name}: expected {expected} pending tags, got {json.dumps(pending_tags, indent=2, sort_keys=True)}")
+
+    def assert_annotated_release_tag_flow(self) -> None:
+        # Annotated tag objects must be peeled to the target commit inside the
+        # reference-transaction quarantine: the tag object must validate against
+        # the merge result, and creating it must clear the pending tag lock.
+        self.merge_to("dev", "main")
+        annotated_main_sha = self.rev_parse("main")
+        self.assert_pending_tag_count(1)
+        result = self.git("tag", "-a", "V1.2", "-m", "annotated release", annotated_main_sha)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"{self.name}: annotated release tag was rejected\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            )
+        self.assert_pending_tag_count(0)
+        peeled = self.git("rev-parse", "--verify", "V1.2^{}").stdout.strip()
+        if peeled != annotated_main_sha:
+            raise AssertionError(f"{self.name}: annotated tag should peel to {annotated_main_sha}, got {peeled}")
 
     def assert_pre_push_auto_syncs_release_tags(self) -> None:
         remote = self.work_root.parent / f"{self.name}-remote.git"
