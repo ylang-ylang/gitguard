@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from release_common import (GitHub, PREFIX, SOURCE_REPO, ReleaseError, _Redirect,
                             sha256, validate_remote_tag, validate_versions,
                             verify_published_release, version_for_tag)
-from release_pipeline import plan, publish, validate_bundle, validate_local_tag
+from release_pipeline import plan, publish, recover_artifact, validate_bundle, validate_local_tag
 
 
 class Service:
@@ -247,6 +247,34 @@ class ReleaseTests(unittest.TestCase):
         self.assertIsNone(redirected.get_header("Authorization"))
         with self.assertRaisesRegex(ReleaseError, "non-HTTPS"):
             _Redirect().redirect_request(request, None, 302, "Found", {}, "http://example.invalid/asset")
+
+    def test_actions_archive_and_release_asset_media_types(self):
+        service = Service()
+        github = GitHub("test-only-not-a-real-token")
+
+        def endpoint(request, **kwargs):
+            path = request.full_url.removeprefix("https://api.github.com")
+            if path == f"{PREFIX}/actions/artifacts/100":
+                media_type = "application/vnd.github+json"
+                content = json.dumps(service.request("GET", path)).encode()
+            elif path == f"{PREFIX}/actions/artifacts/100/zip":
+                media_type = "application/vnd.github+json"
+                content = service.archive
+            elif path == f"{PREFIX}/releases/assets/400":
+                media_type = "application/octet-stream"
+                content = service.files["git_guard-1.18.tar.gz"]
+            else:
+                raise AssertionError(path)
+            if request.get_header("Accept") != media_type:
+                raise urllib.error.HTTPError(request.full_url, 415, "Unsupported media type", {}, None)
+            return io.BytesIO(content)
+
+        with patch.object(github._opener, "open", side_effect=endpoint):
+            files = recover_artifact(github, service.anchor)
+            manifest, raw = validate_bundle(files, service.identity, service.anchor["manifest_sha256"])
+            downloaded = github.download(f"{PREFIX}/releases/assets/400")
+        self.assertEqual(sha256(downloaded), manifest["assets"][0]["sha256"])
+        self.assertEqual(sha256(raw), service.anchor["manifest_sha256"])
 
     def test_no_auth_or_http_failure_is_absence(self):
         for token in (None, "", " "):

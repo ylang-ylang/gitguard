@@ -170,7 +170,8 @@ def update_needed(current, target, version):
 
 def ownership(spec, actor_id):
     fingerprint = hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    return f"git-guard release {spec['tag']}\n\nsource: {SOURCE_REPO}\nrelease-identity: {fingerprint}\ntap-actor: {actor_id}\n"
+    # GitHub normalizes terminal newlines in Git commit messages.
+    return f"git-guard release {spec['tag']}\n\nsource: {SOURCE_REPO}\nrelease-identity: {fingerprint}\ntap-actor: {actor_id}"
 
 
 def exact_diff(files):
