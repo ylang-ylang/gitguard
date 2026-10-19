@@ -6,3 +6,4 @@
 - Canonicalize automated tap ownership messages without a trailing newline because the real GitHub Git API trims it; make the stateful API test model reproduce that behavior.
 - Capture release-controller code from dev, as explicitly approved, while still requiring the package's immutable version tag to resolve within remote main history. V1.18 and its source commit remain untouched.
 - All 34 release/tap regression tests and workflow syntax validation pass after the fixes.
+- Absorb the current dev integration before completing the draft-release API compatibility repair; preserve the existing V1.18 tag and original artifact anchor.

@@ -11,3 +11,4 @@
 - merge feat/runtime-hardening: runtime hardening, trigger log, auto-push
 - merge feat/docs-protected-workflow: document protected-branch workflow
 - Merge feat/homebrew-distribution: packaged policies/runtime, exact-tag release validation, immutable source artifacts and checked Homebrew Formula distribution for 1.18.
+- Merge feat/release-api-fix: repair Actions ZIP media type and Git commit message normalization; capture maintenance automation from dev while keeping V1.18 source pinned to main history.
