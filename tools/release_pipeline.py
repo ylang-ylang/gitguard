@@ -110,13 +110,24 @@ def recover_artifact(github, anchor):
     return files
 
 
+def _release_snapshot(document):
+    # Downloads legitimately increment download_count. Compare immutable asset
+    # identity, not mutable GitHub statistics; actual bytes are verified separately.
+    fields = ("id", "name", "size", "state", "browser_download_url")
+    assets = [{key: asset.get(key) for key in fields} for asset in document.get("assets", [])]
+    return {
+        **{key: document.get(key) for key in ("id", "tag_name", "draft", "prerelease", "body")},
+        "assets": sorted(assets, key=lambda asset: asset["id"]),
+    }
+
+
 def _same_release(github, identity, previous):
     validate_remote_tag(github, identity["tag"], identity)
     fresh = release_document(github, identity["tag"])
     if previous is None:
         if fresh is not None:
             raise ReleaseError("release appeared concurrently; retry without rebuilding")
-    elif fresh is None or any(fresh.get(k) != previous.get(k) for k in ("id", "tag_name", "draft", "body", "assets")):
+    elif fresh is None or _release_snapshot(fresh) != _release_snapshot(previous):
         raise ReleaseError("release identity/assets changed concurrently")
     return fresh
 

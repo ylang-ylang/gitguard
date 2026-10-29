@@ -7,3 +7,4 @@
 - Release V1.16 from dev with clean nested Git environments and linked worktree policy tests.
 - Release V1.17 from dev without user-injectable hook runtime sentinel env variables.
 - Release V1.18 from dev: first version-aligned source package and Homebrew distribution, with tested immutable GitHub release and Formula-only PR automation.
+- Release V1.19 from dev: case branches can start at any declared long-lived branch tip, including main and dev; merge restrictions remain unchanged.

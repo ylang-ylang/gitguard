@@ -99,6 +99,10 @@ than embedding a version-specific Cellar path.
 
 `policy.json` is generated during installation and copied into the target repository under `.git-guard/`. The hook runtime reads this file directly.
 
+Existing installed policy copies require reinstallation to adopt compiler changes: run `git-guard install --repo <repo> --config <config>` with the updated compiler and the desired bundled config name or repository contribution document. In particular, reinstall to expand case-branch origins in `.git-guard/policy.json`; runtime auto-sync alone does not recompile it. Other repositories are not automatically updated.
+
+Reinstalling from an existing contribution document recompiles its graph but preserves its prose, which may still describe only a `main` origin. Choose an updated bundled policy source, or update the repository's own prose, to refresh that explanation too.
+
 `test_case.py` contains config-specific hook behavior tests. Shared test scaffolding lives in `configs/test_base.py`, which only provides generic Git helpers, hook installation, ref snapshots, and rejection assertions. Policy-specific DAG construction and rejection cases belong in each config.
 
 ## Supported DSL
@@ -112,6 +116,8 @@ Git Guard intentionally supports a small Mermaid subset:
 - `merge NAME id:"unique display label" tag:"..."`: records a merge rule plus a tag policy for the merge result on the current checkout target.
 
 Mermaid `id` values are commit ids and must be unique within the graph. Git Guard derives the policy rule id from the merge source and current checkout target, for example `dev to main`.
+
+For `case/*/*` (`case/<context>/<topic>`), the depicted fork is illustrative: the compiler emits alternative `branch_from` edges from every declared long-lived (non-wildcard) branch, currently `main` and `dev` in all bundled case policies. Creation must use an existing allowed source's current tip; `branch_bases.source_ref` records the matching source, using declaration order if multiple sources share that tip. This expansion changes only case creation, not other branch families or merge permissions: case branches still merge only into `feat/*`, never directly into `main` or `dev`.
 
 A `commit id` containing bare lowercase `branch` as a whitespace-separated word is treated as a compressed branch-history marker. Mermaid renders it with a dashed outline, and Git Guard ignores it when deriving direct-commit permission. For example, `commit id:"dev branch history"` can make a protected integration branch visible in the diagram without allowing direct commits to that branch.
 
@@ -376,8 +382,14 @@ tags, merges development branches, or updates installed user machines.
   packaged CLI/hooks and a local-candidate Brew install/test.
 - `release.yml`: automatic entry is a version-tag push; `workflow_dispatch`
   retries an explicit existing tag. Trusted automation is captured from the
-  fixed GitHub main revision before any tagged source runs. Tags must resolve to
-  a full commit already in remote main history, not necessarily its current tip.
+  fixed GitHub dev revision before any tagged source runs. This is the release
+  controller, not the software being shipped: tags must still resolve to a full
+  commit already in remote main history, not necessarily its current tip.
+- The trusted planner has Contents write permission because GitHub hides draft
+  releases from callers without push access, but it performs metadata reads only
+  and executes no tagged source. A published-by-tag 404 is followed by a complete
+  authenticated release listing before declaring absence, so retries find and
+  recover the original draft instead of rebuilding or creating duplicates.
 - A credential-only job checks for the dedicated tap secret without checking out
   or executing source code. A separate `contents: read` job tests, builds and
   executes the verified commit's sdist/wheel and Formula; it has no tap secret.
@@ -401,11 +413,15 @@ bound by ID, run/attempt, ZIP digest and manifest digest in its release-note
 anchor; it never rebuilds replacement bytes. Original artifacts are retained for
 90 days; expired or missing recovery artifacts fail visibly. Published retries
 verify original assets without rebuilding, adding, or overwriting them.
+Draft assets are fetched through authenticated immutable asset IDs and checked
+against the original digests. GitHub's temporary `untagged-*` browser URLs are not
+used for download or Formula generation; canonical version-tag URLs are required
+after publication and before distribution.
 
 ```bash
-gh workflow run release.yml --repo ylang-ylang/gitguard --ref main -f tag=V1.18
+gh workflow run release.yml --repo ylang-ylang/gitguard --ref dev -f tag=V1.18
 # Retry only Brew distribution for an already complete published release:
-gh workflow run release-distribution.yml --repo ylang-ylang/gitguard --ref main -f tag=V1.18
+gh workflow run release-distribution.yml --repo ylang-ylang/gitguard --ref dev -f tag=V1.18
 ```
 
 Use the tag actually prepared by the maintainer, not a branch name or a free-form
@@ -414,10 +430,12 @@ downgrade, foreign PR, missing/red check, or replaced release asset is refused.
 
 ### One-time deployment prerequisites
 
-Integrate the automation through the normal branch flow before the first tag
-push. The canonical GitHub default branch is `main`; restrict review/write
-access to this trusted automation boundary. Local git-guard hooks do not protect
-GitHub from direct writes.
+Integrate automation fixes through maintenance branches into `dev` before
+retrying an existing tag. A dev push does not publish software; only a version
+tag or explicit existing-tag retry enters the release workflow, and the package
+source must remain in main history. Restrict review/write access to both dev
+(trusted automation) and main (release source). The GitHub default branch remains
+main; local git-guard hooks do not protect GitHub from direct writes.
 
 Configure `HOMEBREW_TAP_TOKEN` **in this source repository**, scoped only to
 `ylang-ylang/homebrew-tap`, with Contents and Pull requests read/write, Checks and
@@ -443,8 +461,9 @@ python3 -m venv .venv
 .venv/bin/python -m pip install build
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python tools/build_release.py --out-dir .tmp/candidate
+VERSION=$(.venv/bin/python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
 .venv/bin/python tools/smoke_install.py --python .venv/bin/python \
-  --version 1.18 --artifact .tmp/candidate/git_guard-1.18.tar.gz
+  --version "$VERSION" --artifact ".tmp/candidate/git_guard-$VERSION.tar.gz"
 ```
 
 Candidate manifests explicitly contain `candidate: true` and no release

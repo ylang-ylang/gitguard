@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from release_common import (GitHub, PREFIX, SOURCE_REPO, ReleaseError, _Redirect,
                             sha256, validate_remote_tag, validate_versions,
                             verify_published_release, version_for_tag)
-from release_pipeline import plan, publish, validate_bundle, validate_local_tag
+from release_pipeline import plan, publish, recover_artifact, validate_bundle, validate_local_tag
 
 
 class Service:
@@ -73,7 +73,9 @@ class Service:
             text = f'[project]\nversion = "{self.version}"\n' if "/pyproject.toml?" in path else f'__version__ = "{self.version}"\nraise RuntimeError("must not execute")\n'
             return dict(type="file", encoding="base64", content=base64.b64encode(text.encode()).decode())
         if path == f"{PREFIX}/releases/tags/{self.tag}":
-            return copy.deepcopy(self.document)
+            return copy.deepcopy(self.document) if self.document and not self.document["draft"] else None
+        if path.startswith(f"{PREFIX}/releases?"):
+            return [copy.deepcopy(self.document)] if self.document else []
         if path == f"{PREFIX}/actions/artifacts/100":
             return dict(id=100, name="release-assets-200-1", expired=self.expired, workflow_run=dict(id=200))
         if method == "POST" and path == f"{PREFIX}/releases":
@@ -86,10 +88,13 @@ class Service:
             asset_id = 400 + len(self.asset_bytes)
             self.asset_bytes[asset_id] = data
             self.document["assets"].append(dict(id=asset_id, name=name, size=len(data), digest="sha256:" + sha256(data),
-                state="uploaded", browser_download_url=f"https://github.com/{SOURCE_REPO}/releases/download/{self.tag}/{name}"))
+                state="uploaded", browser_download_url=f"https://github.com/{SOURCE_REPO}/releases/download/untagged-0123456789abcdef0123/{name}"))
             return copy.deepcopy(self.document["assets"][-1])
         if method == "PATCH" and path == f"{PREFIX}/releases/300":
             self.document.update(data)
+            if not self.document["draft"]:
+                for asset in self.document["assets"]:
+                    asset["browser_download_url"] = f"https://github.com/{SOURCE_REPO}/releases/download/{self.tag}/{asset['name']}"
             return copy.deepcopy(self.document)
         raise AssertionError((method, path))
 
@@ -97,7 +102,11 @@ class Service:
         self.downloads.append(path)
         if path == f"{PREFIX}/actions/artifacts/100/zip":
             return self.archive
-        return self.asset_bytes[int(path.rsplit("/", 1)[1])]
+        asset_id = int(path.rsplit("/", 1)[1])
+        for asset in self.document["assets"]:
+            if asset["id"] == asset_id:
+                asset["download_count"] = asset.get("download_count", 0) + 1
+        return self.asset_bytes[asset_id]
 
 
 class ReleaseTests(unittest.TestCase):
@@ -140,6 +149,36 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(plan(service, service.tag, "workflow_dispatch")["mode"], "build")
         publish(service, service.identity, service.anchor)
         self.assertEqual(plan(service, service.tag, "workflow_dispatch")["mode"], "retry")
+
+    def test_draft_lookup_survives_published_endpoint_404(self):
+        service = Service()
+        service.fail_upload = "release.json"
+        with self.assertRaisesRegex(ReleaseError, "interrupted"):
+            publish(service, service.identity, service.anchor)
+        self.assertIsNone(service.request("GET", f"{PREFIX}/releases/tags/{service.tag}"))
+        self.assertEqual(plan(service, service.tag, "workflow_dispatch")["mode"], "retry")
+        service.fail_upload = None
+        self.assertEqual(publish(service, service.identity)["status"], "published")
+        self.assertEqual(service.mutations.count(("POST", f"{PREFIX}/releases")), 1)
+        self.assertTrue(all(asset["download_count"] > 0 for asset in service.document["assets"]))
+
+    def test_duplicate_drafts_fail_closed(self):
+        service = Service()
+        service.fail_upload = "release.json"
+        with self.assertRaises(ReleaseError):
+            publish(service, service.identity, service.anchor)
+        request = service.request
+
+        def duplicates(method, path, *args, **kwargs):
+            if path.startswith(f"{PREFIX}/releases?"):
+                return [copy.deepcopy(service.document), {**copy.deepcopy(service.document), "id": 301}]
+            return request(method, path, *args, **kwargs)
+
+        service.request = duplicates
+        service.mutations.clear()
+        with self.assertRaisesRegex(ReleaseError, "multiple releases"):
+            publish(service, service.identity)
+        self.assertEqual(service.mutations, [])
 
     def test_published_retry_noop_without_retained_artifact(self):
         service = Service()
@@ -247,6 +286,34 @@ class ReleaseTests(unittest.TestCase):
         self.assertIsNone(redirected.get_header("Authorization"))
         with self.assertRaisesRegex(ReleaseError, "non-HTTPS"):
             _Redirect().redirect_request(request, None, 302, "Found", {}, "http://example.invalid/asset")
+
+    def test_actions_archive_and_release_asset_media_types(self):
+        service = Service()
+        github = GitHub("test-only-not-a-real-token")
+
+        def endpoint(request, **kwargs):
+            path = request.full_url.removeprefix("https://api.github.com")
+            if path == f"{PREFIX}/actions/artifacts/100":
+                media_type = "application/vnd.github+json"
+                content = json.dumps(service.request("GET", path)).encode()
+            elif path == f"{PREFIX}/actions/artifacts/100/zip":
+                media_type = "application/vnd.github+json"
+                content = service.archive
+            elif path == f"{PREFIX}/releases/assets/400":
+                media_type = "application/octet-stream"
+                content = service.files["git_guard-1.18.tar.gz"]
+            else:
+                raise AssertionError(path)
+            if request.get_header("Accept") != media_type:
+                raise urllib.error.HTTPError(request.full_url, 415, "Unsupported media type", {}, None)
+            return io.BytesIO(content)
+
+        with patch.object(github._opener, "open", side_effect=endpoint):
+            files = recover_artifact(github, service.anchor)
+            manifest, raw = validate_bundle(files, service.identity, service.anchor["manifest_sha256"])
+            downloaded = github.download(f"{PREFIX}/releases/assets/400")
+        self.assertEqual(sha256(downloaded), manifest["assets"][0]["sha256"])
+        self.assertEqual(sha256(raw), service.anchor["manifest_sha256"])
 
     def test_no_auth_or_http_failure_is_absence(self):
         for token in (None, "", " "):

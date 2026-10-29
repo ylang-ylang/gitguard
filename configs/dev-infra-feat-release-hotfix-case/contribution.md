@@ -86,7 +86,7 @@ gitGraph TB:
 
 - `infra/*` and `feat/*` branch from `dev`, must absorb the current `dev`, and merge to `dev`.
 - `case/*/*` means `case/<context>/<topic>`, where `<context>` is a real project, customer, dataset, robot, deployment, or reproducible scenario.
-- `case/*/*` branches from `main` and may merge only into `feat/*`.
+- `case/*/*` may branch from any declared long-lived branch (`main` or `dev` here) and may merge only into `feat/*`. The graph's fork from `main` is one illustrative origin; policy compilation expands it to every declared non-wildcard branch.
 - `case/*/*` must not merge directly into `dev` or `main`; reusable work must be distilled through `feat/*`.
 - `release/*` branches from `dev`, must merge to `dev`, then merge to `main`; the `main` merge result must be tagged with `v#.#.0`.
 - `hotfix/*` branches from `main`, must merge to `dev`, then merge to `main`; the `main` merge result must be tagged with `v=.=.#`.

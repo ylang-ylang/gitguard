@@ -44,8 +44,11 @@ class GitHub:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme != "https" or parsed.netloc not in {"api.github.com", "uploads.github.com"}:
             raise ReleaseError("GitHub request must use the fixed HTTPS API/upload host")
+        # Actions archive endpoints accept the JSON API media type and redirect
+        # to ZIP bytes. Only Release asset downloads require octet-stream.
+        release_asset = binary and re.fullmatch(r"/repos/[^/]+/[^/]+/releases/assets/[0-9]+", parsed.path)
         headers = {"Authorization": f"Bearer {self._token}", "X-GitHub-Api-Version": "2022-11-28",
-                   "Accept": "application/octet-stream" if binary else "application/vnd.github+json"}
+                   "Accept": "application/octet-stream" if release_asset else "application/vnd.github+json"}
         if isinstance(data, bytes):
             headers["Content-Type"] = "application/octet-stream"
         elif data is not None:
@@ -132,6 +135,22 @@ def validate_remote_tag(github, tag, expected=None):
 def release_document(github, tag):
     version_for_tag(tag)
     result = github.request("GET", f"{PREFIX}/releases/tags/{tag}", allow_404=True)
+    if result is None:
+        # The by-tag endpoint exposes published releases only. A 404 is not
+        # proof of absence until the authenticated draft listing is complete.
+        matches = []
+        for page in range(1, 101):
+            batch = github.request("GET", f"{PREFIX}/releases?per_page=100&page={page}")
+            if not isinstance(batch, list) or any(not isinstance(item, dict) for item in batch):
+                raise ReleaseError("invalid release listing")
+            matches.extend(item for item in batch if item.get("tag_name") == tag)
+            if len(batch) < 100:
+                break
+        else:
+            raise ReleaseError("release listing exceeds pagination safety bound")
+        if len(matches) > 1:
+            raise ReleaseError("multiple releases share the requested tag; refusing draft adoption")
+        result = matches[0] if matches else None
     if result is not None and (result.get("tag_name") != tag or result.get("prerelease")):
         raise ReleaseError("release tag/prerelease identity mismatch")
     if result is not None and (type(result.get("id")) is not int or result["id"] <= 0 or type(result.get("draft")) is not bool):
@@ -201,7 +220,9 @@ def verify_assets(github, document, manifest, raw, *, complete):
     for asset in assets:
         name = asset["name"]
         url = f"https://github.com/{SOURCE_REPO}/releases/download/{manifest['source']['tag']}/{name}"
-        if asset.get("state") != "uploaded" or asset.get("browser_download_url") != url:
+        # Draft browser URLs use GitHub's temporary untagged-* namespace.
+        # Fetch by authenticated asset ID; require the canonical URL once public.
+        if asset.get("state") != "uploaded" or (not document.get("draft") and asset.get("browser_download_url") != url):
             raise ReleaseError(f"asset state/download URL identity mismatch: {name}")
         digest, size = expected[name]
         data = github.download(f"{PREFIX}/releases/assets/{asset['id']}")

@@ -120,7 +120,7 @@ class TapModel:
                 tree[entry["path"]] = self.objects[entry["sha"]]
             return {"sha": self.store(tree)}
         if method == "POST" and path == "/git/commits":
-            return {"sha": self.store({"tree": {"sha": data["tree"]}, "message": data["message"],
+            return {"sha": self.store({"tree": {"sha": data["tree"]}, "message": data["message"].rstrip("\n"),
                                        "parents": [{"sha": p} for p in data["parents"]]})}
         if method == "POST" and path == "/git/refs":
             branch = data["ref"][len("refs/heads/"):]
