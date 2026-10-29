@@ -99,6 +99,10 @@ than embedding a version-specific Cellar path.
 
 `policy.json` is generated during installation and copied into the target repository under `.git-guard/`. The hook runtime reads this file directly.
 
+Existing installed policy copies require reinstallation to adopt compiler changes: run `git-guard install --repo <repo> --config <config>` with the updated compiler and the desired bundled config name or repository contribution document. In particular, reinstall to expand case-branch origins in `.git-guard/policy.json`; runtime auto-sync alone does not recompile it. Other repositories are not automatically updated.
+
+Reinstalling from an existing contribution document recompiles its graph but preserves its prose, which may still describe only a `main` origin. Choose an updated bundled policy source, or update the repository's own prose, to refresh that explanation too.
+
 `test_case.py` contains config-specific hook behavior tests. Shared test scaffolding lives in `configs/test_base.py`, which only provides generic Git helpers, hook installation, ref snapshots, and rejection assertions. Policy-specific DAG construction and rejection cases belong in each config.
 
 ## Supported DSL
@@ -112,6 +116,8 @@ Git Guard intentionally supports a small Mermaid subset:
 - `merge NAME id:"unique display label" tag:"..."`: records a merge rule plus a tag policy for the merge result on the current checkout target.
 
 Mermaid `id` values are commit ids and must be unique within the graph. Git Guard derives the policy rule id from the merge source and current checkout target, for example `dev to main`.
+
+For `case/*/*` (`case/<context>/<topic>`), the depicted fork is illustrative: the compiler emits alternative `branch_from` edges from every declared long-lived (non-wildcard) branch, currently `main` and `dev` in all bundled case policies. Creation must use an existing allowed source's current tip; `branch_bases.source_ref` records the matching source, using declaration order if multiple sources share that tip. This expansion changes only case creation, not other branch families or merge permissions: case branches still merge only into `feat/*`, never directly into `main` or `dev`.
 
 A `commit id` containing bare lowercase `branch` as a whitespace-separated word is treated as a compressed branch-history marker. Mermaid renders it with a dashed outline, and Git Guard ignores it when deriving direct-commit permission. For example, `commit id:"dev branch history"` can make a protected integration branch visible in the diagram without allowing direct commits to that branch.
 
@@ -455,8 +461,9 @@ python3 -m venv .venv
 .venv/bin/python -m pip install build
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python tools/build_release.py --out-dir .tmp/candidate
+VERSION=$(.venv/bin/python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
 .venv/bin/python tools/smoke_install.py --python .venv/bin/python \
-  --version 1.18 --artifact .tmp/candidate/git_guard-1.18.tar.gz
+  --version "$VERSION" --artifact ".tmp/candidate/git_guard-$VERSION.tar.gz"
 ```
 
 Candidate manifests explicitly contain `candidate: true` and no release

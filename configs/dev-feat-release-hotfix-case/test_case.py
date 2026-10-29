@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from configs.test_base import PolicyHookTestBase
 
 
@@ -44,7 +46,6 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
 
     def run_rejection_tests(self) -> None:
         self.expect_rejected(["branch", "bug/demo", "dev"], "BRANCH_NAME_NOT_ALLOWED")
-        self.expect_rejected(["branch", "case/from-dev/bad", "dev"], "BRANCH_SOURCE_MISMATCH")
         self.expect_rejected(["branch", "case/missing-topic", "main"], "BRANCH_NAME_NOT_ALLOWED")
         self.expect_rejected(["branch", "case/from-feature/bad", "feat/reject-to-main"], "BRANCH_SOURCE_MISMATCH")
         self.expect_rejected(["branch", "release/from-main", "main"], "BRANCH_SOURCE_MISMATCH")
@@ -82,13 +83,22 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
         self.git("checkout", "dev")
 
     def create_feature_flow(self) -> None:
+        if self.rev_parse("main") == self.rev_parse("dev"):
+            raise AssertionError(f"{self.name}: case origin tests require distinct main and dev tips")
         case_branch = "case/main-context/export"
         self.create_branch(case_branch, "main")
+        self.assert_branch_base_source(case_branch, "refs/heads/main")
         case_sha = self.commit_file(case_branch, "case-export.txt", "case export\n", "case export")
+
+        dev_case_branch = "case/dev-context/export"
+        self.create_branch(dev_case_branch, "dev")
+        self.assert_branch_base_source(dev_case_branch, "refs/heads/dev")
+        dev_case_sha = self.commit_file(dev_case_branch, "case-dev.txt", "case from dev\n", "case work from dev")
 
         branch = "feat/export"
         self.create_branch(branch, "dev")
         self.merge_to(case_branch, branch)
+        self.merge_to(dev_case_branch, branch)
         feature_sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
         dev_advance_branch = "feat/dev-during-feature"
         self.create_branch(dev_advance_branch, "dev")
@@ -103,8 +113,20 @@ class BasicFeatureReleaseHookTest(PolicyHookTestBase):
         self.merge_to(branch, "dev")
         self.assert_is_ancestor(case_sha, branch)
         self.assert_is_ancestor(case_sha, "dev")
+        self.assert_is_ancestor(dev_case_sha, branch)
+        self.assert_is_ancestor(dev_case_sha, "dev")
         self.assert_is_ancestor(feature_sha, "dev")
         self.assert_is_ancestor(dev_sha, branch)
+
+    def assert_branch_base_source(self, branch: str, source_ref: str) -> None:
+        branch_ref = f"refs/heads/{branch}"
+        branch_base = self.state().get("branch_bases", {}).get(branch_ref)
+        if branch_base is None:
+            raise AssertionError(f"{self.name}: expected branch base state for {branch_ref}")
+        if branch_base.get("source_ref") != source_ref:
+            raise AssertionError(
+                f"{self.name}: expected {branch_ref} source {source_ref}, got {json.dumps(branch_base, indent=2, sort_keys=True)}"
+            )
 
     def create_release_flow(self) -> None:
         branch = "release/1.1"

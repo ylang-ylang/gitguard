@@ -185,13 +185,14 @@ def graph_to_policy(graph: ParsedGraph, source_file: str) -> dict[str, Any]:
             ],
             "branch_from": [
                 {
-                    "source": edge.source,
+                    "source": source,
                     "target": edge.target,
-                    "source_ref": ref_pattern(edge.source),
+                    "source_ref": ref_pattern(source),
                     "target_ref": ref_pattern(edge.target),
                     "target_ref_regex": ref_regex(edge.target),
                 }
                 for edge in graph.branch_from
+                for source in (long_lived if edge.target == "case/*/*" else [edge.source])
             ],
             "merge_rules": merge_rules,
             "required_targets": required_targets(delivery_merge_rules(graph.merge_rules)),

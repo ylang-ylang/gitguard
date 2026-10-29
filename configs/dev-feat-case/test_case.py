@@ -45,7 +45,6 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
 
     def run_rejection_tests(self) -> None:
         self.expect_rejected(["branch", "feat/from-main", "main"], "BRANCH_SOURCE_MISMATCH")
-        self.expect_rejected(["branch", "case/from-dev/bad", "dev"], "BRANCH_SOURCE_MISMATCH")
         self.expect_rejected(["branch", "case/missing-topic", "dev"], "BRANCH_NAME_NOT_ALLOWED")
         self.expect_rejected(["branch", "case/from-feature/bad", "feat/unmerged"], "BRANCH_SOURCE_MISMATCH")
         self.expect_rejected(["branch", "wrong/test", "dev"], "BRANCH_NAME_NOT_ALLOWED")
@@ -54,6 +53,9 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.assert_same_sha_tie_merge_allowed()
 
         self.git("checkout", "dev")
+        self.expect_merge_rejected("case/dev-context/reject-to-dev", "PROTECTED_REF_NO_ALLOWED_SOURCE")
+
+        self.git("checkout", "main")
         self.expect_merge_rejected("case/dev-context/reject-to-dev", "PROTECTED_REF_NO_ALLOWED_SOURCE")
 
         self.git("checkout", "dev")
@@ -162,14 +164,22 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.git("branch", "-D", "wrong/legacy")
 
     def create_feature_release(self) -> None:
+        if self.rev_parse("main") == self.rev_parse("dev"):
+            raise AssertionError(f"{self.name}: case origin tests require distinct main and dev tips")
         main_case_branch = "case/main-context/bootstrap"
         self.create_branch(main_case_branch, "main")
         main_case_sha = self.commit_file(main_case_branch, "case-main.txt", "case from main\n", "case work from main")
         self.assert_branch_base_source(main_case_branch, "refs/heads/main")
 
+        dev_case_branch = "case/dev-context/bootstrap"
+        self.create_branch(dev_case_branch, "dev")
+        self.assert_branch_base_source(dev_case_branch, "refs/heads/dev")
+        dev_case_sha = self.commit_file(dev_case_branch, "case-dev.txt", "case from dev\n", "case work from dev")
+
         branch = "feat/initial"
         self.create_branch(branch, "dev")
         self.merge_to(main_case_branch, branch)
+        self.merge_to(dev_case_branch, branch)
         self.feature_sha = self.commit_file(branch, "feature.txt", "feature\n", "feature work")
 
         advance_branch = "feat/dev-advance"
@@ -184,6 +194,8 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
         self.main_release_sha = self.rev_parse("main")
         self.tag("V1.0", self.main_release_sha)
         self.assert_is_ancestor(main_case_sha, branch)
+        self.assert_is_ancestor(dev_case_sha, branch)
+        self.assert_is_ancestor(dev_case_sha, "dev")
         self.assert_is_ancestor(self.feature_sha, "dev")
         self.assert_is_ancestor(dev_advance_sha, branch)
         self.assert_is_ancestor(self.dev_release_sha, "main")
@@ -201,7 +213,7 @@ class DevFeatCaseHookTest(PolicyHookTestBase):
 
     def create_case_reject_to_dev_fixture(self) -> None:
         branch = "case/dev-context/reject-to-dev"
-        self.create_branch(branch, "main")
+        self.create_branch(branch, "dev")
         self.commit_file(branch, "case-reject-dev.txt", "case reject dev\n", "fixture case reject to dev")
 
     def assert_branch_base_source(self, branch: str, source_ref: str) -> None:

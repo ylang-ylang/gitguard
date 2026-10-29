@@ -14,3 +14,4 @@
 - Merge feat/release-api-fix: repair Actions ZIP media type and Git commit message normalization; capture maintenance automation from dev while keeping V1.18 source pinned to main history.
 - Merge draft-recovery compatibility: find unpublished releases through the draft listing and ignore download counters when comparing identity; retain the original V1.18 artifact.
 - Merge draft asset URL handling: verify unpublished bytes by immutable asset ID, and require canonical V1.18 URLs only after publication.
+- Merge feat/case-long-lived-origins for 1.19: allow case creation from every declared long-lived tip, record matching origins, and preserve case-to-feature-only integration.
