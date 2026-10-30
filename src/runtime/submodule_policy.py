@@ -6,27 +6,27 @@ from typing import Any
 try:
     from .common import HookReject, RefUpdate, SubmoduleBranchTip, SubmoduleGitlink, ZERO, warn
     from .config import config_bool, config_string_list
-    from .git_ops import git, is_ancestor, matches_ref_pattern, short_sha
+    from .git_ops import git, git_path, is_ancestor, matches_ref_pattern, short_sha
 except ImportError:  # pragma: no cover - installed hook script mode
     from common import HookReject, RefUpdate, SubmoduleBranchTip, SubmoduleGitlink, ZERO, warn
     from config import config_bool, config_string_list
-    from git_ops import git, is_ancestor, matches_ref_pattern, short_sha
+    from git_ops import git, git_path, is_ancestor, matches_ref_pattern, short_sha
 
 def enforce_submodule_main_guard(repo: Path, config: dict[str, Any], updates: list[RefUpdate]) -> None:
     if not config_bool(config, "submodules", "main_guard"):
         return
     allowed_branches = config_string_list(config, "submodules", "allowed_branches")
 
-    checked: set[tuple[str, str]] = set()
+    checked: set[tuple[str, str, str]] = set()
     for update in updates:
         if update.new == ZERO or not update.ref.startswith("refs/heads/"):
             continue
         for gitlink in submodule_gitlinks(repo, update.new):
-            key = (gitlink.path, gitlink.sha)
+            key = (update.new, gitlink.path, gitlink.sha)
             if key in checked:
                 continue
             checked.add(key)
-            validate_submodule_main_guard(repo, gitlink, allowed_branches)
+            validate_submodule_main_guard(repo, gitlink, allowed_branches, update.new)
 
 def submodule_gitlinks(repo: Path, commit: str) -> list[SubmoduleGitlink]:
     result = git(repo, "ls-tree", "-r", "-z", commit)
@@ -40,9 +40,11 @@ def submodule_gitlinks(repo: Path, commit: str) -> list[SubmoduleGitlink]:
             gitlinks.append(SubmoduleGitlink(path=path, sha=parts[2]))
     return gitlinks
 
-def validate_submodule_main_guard(repo: Path, gitlink: SubmoduleGitlink, allowed_branches: list[str]) -> None:
-    submodule = repo / gitlink.path
-    if not is_git_worktree(submodule):
+def validate_submodule_main_guard(
+    repo: Path, gitlink: SubmoduleGitlink, allowed_branches: list[str], target_commit: str,
+) -> None:
+    submodule = _registered_submodule(repo, gitlink.path, target_commit)
+    if submodule is None:
         raise HookReject("SUBMODULE_REPO_MISSING", path=gitlink.path, commit=short_sha(gitlink.sha))
 
     if not commit_exists(submodule, gitlink.sha):
@@ -138,8 +140,48 @@ def submodule_local_branch_warning_code(tip: SubmoduleBranchTip) -> str:
         return "SUBMODULE_NOT_ON_ORIGIN_MAIN_BUT_ON_LOCAL_MAIN"
     return "SUBMODULE_NOT_ON_ALLOWED_REMOTE_BRANCH_BUT_ON_LOCAL_BRANCH"
 
+def _submodule_paths(repo: Path, target_commit: str | None = None) -> list[tuple[str, str]]:
+    source = ("--blob", f"{target_commit}:.gitmodules") if target_commit else ("--file", str(repo / ".gitmodules"))
+    result = git(repo, "config", "--null", *source, "--get-regexp", r"^submodule\..*\.path$", check=False)
+    if result.returncode != 0:
+        return []
+    return [
+        (key.removeprefix("submodule.").removesuffix(".path"), path)
+        for entry in result.stdout.split("\0") if entry
+        for key, path in [entry.split("\n", 1)]
+    ]
+
+def _registered_submodule(repo: Path, path: str, target_commit: str) -> Path | None:
+    # Paths belong to commits; module names identify their initialized repositories.
+    target_paths = _submodule_paths(repo, target_commit)
+    names = [name for name, module_path in target_paths if module_path == path]
+    if len(names) != 1:
+        return None
+    name = names[0]
+    if sum(module_name == name for module_name, _ in target_paths) != 1:
+        return None
+    current_paths = _submodule_paths(repo)
+    paths = [module_path for module_name, module_path in current_paths if module_name == name]
+    if len(paths) != 1 or sum(module_path == paths[0] for _, module_path in current_paths) != 1:
+        return None
+    submodule = repo / paths[0]
+    if not is_git_worktree(submodule):
+        return None
+    # Git supports both absorbed modules/<name> and old-form embedded .git directories.
+    # Neither parent discovery nor a gitfile borrowed from another module is sufficient.
+    actual_git_dir = Path(git(submodule, "rev-parse", "--absolute-git-dir").stdout.strip()).resolve()
+    if actual_git_dir != git_path(repo, f"modules/{name}").resolve():
+        embedded = submodule / ".git"
+        if not embedded.is_dir() or actual_git_dir != embedded.resolve():
+            return None
+        superproject = git(submodule, "rev-parse", "--show-superproject-working-tree").stdout.strip()
+        if not superproject or Path(superproject).resolve() != repo.resolve():
+            return None
+    return submodule
+
 def is_git_worktree(path: Path) -> bool:
-    return git(path, "rev-parse", "--show-toplevel", check=False).returncode == 0
+    result = git(path, "rev-parse", "--show-toplevel", check=False)
+    return result.returncode == 0 and Path(result.stdout.strip()).resolve() == path.resolve()
 
 def commit_exists(repo: Path, commit: str) -> bool:
     return git(repo, "cat-file", "-e", f"{commit}^{{commit}}", check=False).returncode == 0
